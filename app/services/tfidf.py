@@ -20,3 +20,12 @@ def compute_idf(documents_tokens: list[list[str]]) -> dict[str, float]:
         unique = set(doc)
         doc_freqs.update(unique)
     return {term: math.log((n + 1.0) / (df + 1.0)) + 1.0 for term, df in doc_freqs.items()}
+
+def normalize_vector(weights: dict[str, float]) -> dict[str, float]:
+    if not weights:
+        return {}
+    norm = math.sqrt(sum(v * v for v in weights.values()))
+    if norm == 0.0:
+        return {k: 0.0 for k in weights}
+    return {k: round(v / norm, 4) for k, v in weights.items()}
+

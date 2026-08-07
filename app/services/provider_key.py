@@ -43,3 +43,18 @@ def save_provider_key(session, provider: str, encrypted: str):
     session.commit()
     session.refresh(pk)
     return pk
+
+
+def list_provider_keys(session):
+    """List all provider keys from the database."""
+    return session.query(ProviderKey).all()
+
+
+def delete_provider_key(session, key_id: int):
+    """Delete a provider key by ID."""
+    pk = session.query(ProviderKey).filter_by(id=key_id).first()
+    if pk:
+        session.delete(pk)
+        session.commit()
+        return True
+    return False

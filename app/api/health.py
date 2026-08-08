@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from src.core.health import HealthService, HealthRepository
+from app.core.health import HealthService, HealthRepository
 
 router = APIRouter()
 

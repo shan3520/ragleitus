@@ -12,7 +12,8 @@ from app.api.chunking import router as chunking_router
 def create_app() -> FastAPI:
     setup_logging()
     app = FastAPI(
-        title=settings.app_name,
+        title=settings.PROJECT_NAME,
+        version=settings.VERSION,
         openapi_url="/openapi.json",
         docs_url="/docs",
         redoc_url="/redoc"

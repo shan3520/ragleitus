@@ -3,7 +3,7 @@ from pathlib import Path
 # Ensure repo root is on sys.path for test collection environment
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
-from src.main import app
+from app.main import app
 
 client = TestClient(app)
 

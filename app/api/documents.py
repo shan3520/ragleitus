@@ -1,6 +1,6 @@
 import os
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, File
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -30,3 +30,20 @@ def list_documents(user: dict = Depends(get_current_user), session=Depends(get_d
         {"id": document.id, "user_id": document.user_id, "title": document.title}
         for document in session.query(Document).filter_by(user_id=user["username"]).all()
     ]
+
+
+@router.post("/api/documents", status_code=201)
+async def upload_document(file: UploadFile = File(...), user: dict = Depends(get_current_user), session=Depends(get_db_session)):
+    """Accept an uploaded file, create a Document with status 'received', and persist it."""
+    content_bytes = await file.read()
+    try:
+        content = content_bytes.decode("utf-8")
+    except Exception:
+        content = None
+
+    doc = Document(user_id=user["username"], title=(file.filename or "uploaded"), content=content, status="received")
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+
+    return {"id": doc.id, "status": doc.status, "title": doc.title}

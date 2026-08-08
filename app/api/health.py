@@ -14,4 +14,4 @@ def health_check(service: HealthService = Depends(get_health_service)):
 
 @router.get("/version")
 def get_version():
-    return {"name": settings.PROJECT_NAME, "version": settings.VERSION}
+    return {"app_name": settings.PROJECT_NAME, "version": settings.VERSION}

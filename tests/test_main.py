@@ -14,3 +14,10 @@ def test_app_initialization():
     openapi_schema = response.json()
     assert openapi_schema["info"]["title"] == settings.PROJECT_NAME
     assert openapi_schema["info"]["version"] == settings.VERSION
+
+def test_version_endpoint():
+    response = client.get("/version")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["app_name"] == settings.PROJECT_NAME
+    assert data["version"] == settings.VERSION

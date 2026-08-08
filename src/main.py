@@ -1,6 +1,6 @@
 import logging
 from fastapi import FastAPI
-from src.core.config import settings
+from app.core.config import settings
 from app.core.logging import setup_logging
 from src.api.health import router as health_router
 from src.api.provider_keys import router as provider_keys_router

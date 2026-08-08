@@ -1,7 +1,7 @@
 import logging
 import json
 import io
-from src.core.logging import setup_logging, JSONFormatter
+from app.core.logging import setup_logging, JSONFormatter
 
 def test_json_logging():
     # Capture log output

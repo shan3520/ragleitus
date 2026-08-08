@@ -1,13 +1,12 @@
 import os
 
-import fitz
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.auth import get_current_user
 from app.models import Chunk, Document
-from app.services.pipeline import extract_text, clean_text, chunk_text
+from app.services.pdf_extraction import extract_pdf_pages
 
 router = APIRouter()
 
@@ -34,53 +33,13 @@ def list_documents(user: dict = Depends(get_current_user), session=Depends(get_d
     ]
 
 
-@router.post("/api/documents", status_code=201)
-async def upload_document(file: UploadFile = File(...), user: dict = Depends(get_current_user), session=Depends(get_db_session)):
+@router.post("/documents/extract")
+async def extract_document(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
     content_bytes = await file.read()
-    import hashlib
-    sha = hashlib.sha256(content_bytes).hexdigest()
-
-    existing = session.query(Document).filter_by(user_id=user["username"], sha256=sha).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="Document already exists")
-
-    doc = Document(user_id=user["username"], title=file.filename, status="pending", sha256=sha)
-    session.add(doc)
-    session.commit()
-    session.refresh(doc)
-
-    try:
-        # Extract text from PDF using pipeline
-        extracted_text = extract_text(content_bytes)
-        cleaned_text = clean_text(extracted_text)
-        chunks = chunk_text(cleaned_text)
-        
-        # Bulk save chunks
-        for index, chunk_content in enumerate(chunks, start=1):
-            if chunk_content:
-                session.add(Chunk(document_id=doc.id, content=chunk_content, sequence_order=index))
-        
-        # Update document status to indexed
-        doc.status = "indexed"
-        session.commit()
-        session.refresh(doc)
-    except Exception as e:
-        # Rollback and delete the document on extraction failure
-        session.rollback()
-        doc_id = doc.id
-        session.delete(doc)
-        session.commit()
-        raise HTTPException(status_code=500, detail=f"Failed to extract or process document: {str(e)}")
-
-    return {
-        "id": doc.id,
-        "status": doc.status,
-        "title": doc.title,
-        "chunks": [{"sequence_order": chunk.sequence_order, "content": chunk.content} for chunk in doc.chunks],
-    }
+    return {"pages": extract_pdf_pages(content_bytes)}
 
 
 @router.get("/api/documents/{document_id}")

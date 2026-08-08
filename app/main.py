@@ -7,6 +7,7 @@ from app.api.provider_keys import router as provider_keys_router
 from app.api.auth import router as auth_router
 from app.api.documents import router as documents_router
 from app.api.cleaning import router as cleaning_router
+from app.api.chunking import router as chunking_router
 
 def create_app() -> FastAPI:
     setup_logging()
@@ -22,6 +23,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(documents_router)
     app.include_router(cleaning_router)
+    app.include_router(chunking_router)
     
     logger = logging.getLogger(__name__)
     logger.info("Application starting up")

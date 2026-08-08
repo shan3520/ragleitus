@@ -1,11 +1,12 @@
 import os
 
-from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, File
+import fitz
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.auth import get_current_user
-from app.models import Document
+from app.models import Chunk, Document
 
 router = APIRouter()
 
@@ -34,16 +35,49 @@ def list_documents(user: dict = Depends(get_current_user), session=Depends(get_d
 
 @router.post("/api/documents", status_code=201)
 async def upload_document(file: UploadFile = File(...), user: dict = Depends(get_current_user), session=Depends(get_db_session)):
-    """Accept an uploaded file, create a Document with status 'received', and persist it."""
-    content_bytes = await file.read()
-    try:
-        content = content_bytes.decode("utf-8")
-    except Exception:
-        content = None
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
-    doc = Document(user_id=user["username"], title=(file.filename or "uploaded"), content=content, status="received")
+    content_bytes = await file.read()
+    pdf = fitz.open(stream=content_bytes, filetype="pdf")
+    page_texts = [page.get_text("text").strip() for page in pdf]
+    pdf.close()
+
+    doc = Document(user_id=user["username"], title=file.filename, status="received")
     session.add(doc)
     session.commit()
     session.refresh(doc)
 
-    return {"id": doc.id, "status": doc.status, "title": doc.title}
+    for index, page_text in enumerate(page_texts, start=1):
+        if page_text:
+            session.add(Chunk(document_id=doc.id, content=page_text, sequence_order=index))
+    session.commit()
+
+    return {
+        "id": doc.id,
+        "status": doc.status,
+        "title": doc.title,
+        "chunks": [{"sequence_order": chunk.sequence_order, "content": chunk.content} for chunk in doc.chunks],
+    }
+
+
+@router.get("/api/documents/{document_id}")
+def get_document(document_id: int, user: dict = Depends(get_current_user), session=Depends(get_db_session)):
+    document = session.query(Document).filter_by(id=document_id, user_id=user["username"]).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {
+        "id": document.id,
+        "status": document.status,
+        "title": document.title,
+        "chunks": [{"sequence_order": chunk.sequence_order, "content": chunk.content} for chunk in document.chunks],
+    }
+
+
+@router.delete("/api/documents/{document_id}", status_code=204)
+def delete_document(document_id: int, user: dict = Depends(get_current_user), session=Depends(get_db_session)):
+    document = session.query(Document).filter_by(id=document_id, user_id=user["username"]).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    session.delete(document)
+    session.commit()

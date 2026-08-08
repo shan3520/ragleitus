@@ -43,6 +43,13 @@ def test_document_pdf_e2e_flow():
     assert payload["title"] == "sample.pdf"
     assert len(payload["chunks"]) == 2
 
+    # Duplicate upload should be rejected with 409
+    response = client.post(
+        "/api/documents",
+        files={"file": ("sample.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert response.status_code == 409
+
     document_id = payload["id"]
 
     response = client.get(f"/api/documents/{document_id}")

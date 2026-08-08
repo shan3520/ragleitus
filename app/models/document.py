@@ -10,8 +10,9 @@ class Document(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, nullable=False, index=True)
     title = Column(String(255), nullable=False)
+    sha256 = Column(String(64), nullable=True, index=True)
     content = Column(Text, nullable=True)
-    status = Column(String(50), nullable=False, default="received")
+    status = Column(String(50), nullable=False, default="pending")
 
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
 

@@ -39,11 +39,18 @@ async def upload_document(file: UploadFile = File(...), user: dict = Depends(get
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
     content_bytes = await file.read()
+    import hashlib
+    sha = hashlib.sha256(content_bytes).hexdigest()
+
+    existing = session.query(Document).filter_by(user_id=user["username"], sha256=sha).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Document already exists")
+
     pdf = fitz.open(stream=content_bytes, filetype="pdf")
     page_texts = [page.get_text("text").strip() for page in pdf]
     pdf.close()
 
-    doc = Document(user_id=user["username"], title=file.filename, status="received")
+    doc = Document(user_id=user["username"], title=file.filename, status="pending", sha256=sha)
     session.add(doc)
     session.commit()
     session.refresh(doc)
@@ -53,6 +60,7 @@ async def upload_document(file: UploadFile = File(...), user: dict = Depends(get
             session.add(Chunk(document_id=doc.id, content=page_text, sequence_order=index))
     session.commit()
 
+    session.refresh(doc)
     return {
         "id": doc.id,
         "status": doc.status,

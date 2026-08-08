@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.auth import get_current_user
 from app.models import Chunk, Document
+from app.services.pipeline import extract_text, clean_text, chunk_text
 
 router = APIRouter()
 
@@ -46,21 +47,34 @@ async def upload_document(file: UploadFile = File(...), user: dict = Depends(get
     if existing:
         raise HTTPException(status_code=409, detail="Document already exists")
 
-    pdf = fitz.open(stream=content_bytes, filetype="pdf")
-    page_texts = [page.get_text("text").strip() for page in pdf]
-    pdf.close()
-
     doc = Document(user_id=user["username"], title=file.filename, status="pending", sha256=sha)
     session.add(doc)
     session.commit()
     session.refresh(doc)
 
-    for index, page_text in enumerate(page_texts, start=1):
-        if page_text:
-            session.add(Chunk(document_id=doc.id, content=page_text, sequence_order=index))
-    session.commit()
+    try:
+        # Extract text from PDF using pipeline
+        extracted_text = extract_text(content_bytes)
+        cleaned_text = clean_text(extracted_text)
+        chunks = chunk_text(cleaned_text)
+        
+        # Bulk save chunks
+        for index, chunk_content in enumerate(chunks, start=1):
+            if chunk_content:
+                session.add(Chunk(document_id=doc.id, content=chunk_content, sequence_order=index))
+        
+        # Update document status to indexed
+        doc.status = "indexed"
+        session.commit()
+        session.refresh(doc)
+    except Exception as e:
+        # Rollback and delete the document on extraction failure
+        session.rollback()
+        doc_id = doc.id
+        session.delete(doc)
+        session.commit()
+        raise HTTPException(status_code=500, detail=f"Failed to extract or process document: {str(e)}")
 
-    session.refresh(doc)
     return {
         "id": doc.id,
         "status": doc.status,

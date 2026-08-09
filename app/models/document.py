@@ -8,7 +8,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
+    user_id = Column(Integer, nullable=True, index=True)
     title = Column(String(255), nullable=False)
     sha256 = Column(String(64), nullable=True, index=True)
     content = Column(Text, nullable=True)

@@ -16,6 +16,5 @@ def health_check(service: HealthService = Depends(get_health_service)):
 def get_version():
     return {
         "name": settings.PROJECT_NAME,
-        "app_name": settings.PROJECT_NAME,
         "version": settings.VERSION,
     }

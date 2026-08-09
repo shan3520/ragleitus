@@ -19,5 +19,5 @@ def test_version_endpoint():
     response = client.get("/version")
     assert response.status_code == 200
     data = response.json()
-    assert data["app_name"] == settings.PROJECT_NAME
+    assert data["name"] == settings.PROJECT_NAME
     assert data["version"] == settings.VERSION

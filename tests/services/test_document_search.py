@@ -20,7 +20,7 @@ def test_search_documents_empty_query():
 
 def test_search_documents_title_and_content_match():
     docs = [
-        _FakeDoc(1, "Python RAG", "Building retrieval augmented generation"),
+        _FakeDoc(1, "Python RAG", "Building Python retrieval augmented generation"),
         _FakeDoc(2, "FastAPI guide", "FastAPI web framework with Python"),
         _FakeDoc(3, "Database", "SQLAlchemy ORM setup"),
     ]

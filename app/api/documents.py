@@ -22,7 +22,10 @@ def list_documents(user: dict = Depends(get_current_user), session: Session = De
 
 
 @router.post("/documents/extract")
-async def extract_document(file: UploadFile = File(...)):
+async def extract_document(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 

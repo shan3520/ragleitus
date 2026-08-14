@@ -41,7 +41,6 @@ def _sign_payload(payload: str) -> str:
 
 def _verify_signature(payload: str, signature: str) -> bool:
     expected = _sign_payload(payload)
-    # use compare_digest for timing-safe comparison
     return hmac.compare_digest(expected, signature)
 
 
@@ -69,7 +68,9 @@ def login(req: LoginRequest):
     return {"access_token": token, "token_type": "bearer"}
 
 
-async def get_current_user(authorization: str = Header(...)) -> dict:
+async def get_current_user(authorization: str | None = Header(default=None)) -> dict:
+    if not authorization:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authorization header")
     if not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authorization header")
     token = authorization.split(" ", 1)[1]

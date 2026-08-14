@@ -13,6 +13,9 @@ if DATABASE_URL.startswith("sqlite"):
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Auto-create tables for SQLite / local development
+Base.metadata.create_all(bind=engine)
+
 
 def get_db():
     """FastAPI dependency that yields a scoped database session."""

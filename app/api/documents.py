@@ -1,32 +1,19 @@
-import os
-
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.db.database import get_db
 from app.models import Chunk, Document
 from app.services.pdf_extraction import extract_pdf_pages
 
 router = APIRouter()
 
-
-def get_db_session():
-    db_url = os.environ.get("DATABASE_URL", "sqlite:///./documents.db")
-    connect_args = {}
-    if db_url.startswith("sqlite"):
-        connect_args = {"check_same_thread": False}
-    engine = create_engine(db_url, connect_args=connect_args)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    try:
-        yield session
-    finally:
-        session.close()
+# Alias for backward compatibility
+get_db_session = get_db
 
 
 @router.get("/api/documents")
-def list_documents(user: dict = Depends(get_current_user), session=Depends(get_db_session)):
+def list_documents(user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
     return [
         {"id": document.id, "user_id": document.user_id, "title": document.title}
         for document in session.query(Document).filter_by(user_id=user["username"]).all()
@@ -43,7 +30,7 @@ async def extract_document(file: UploadFile = File(...)):
 
 
 @router.get("/api/documents/{document_id}")
-def get_document(document_id: int, user: dict = Depends(get_current_user), session=Depends(get_db_session)):
+def get_document(document_id: int, user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
     document = session.query(Document).filter_by(id=document_id, user_id=user["username"]).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -56,7 +43,7 @@ def get_document(document_id: int, user: dict = Depends(get_current_user), sessi
 
 
 @router.delete("/api/documents/{document_id}", status_code=204)
-def delete_document(document_id: int, user: dict = Depends(get_current_user), session=Depends(get_db_session)):
+def delete_document(document_id: int, user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
     document = session.query(Document).filter_by(id=document_id, user_id=user["username"]).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")

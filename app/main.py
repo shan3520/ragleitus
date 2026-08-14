@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.middleware import RequestIDMiddleware
+from app.db.database import Base, engine
 from app.api.health import router as health_router
 from app.api.provider_keys import router as provider_keys_router
 from app.api.auth import router as auth_router
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
+    Base.metadata.create_all(bind=engine)
     logger.info(
         "Application starting",
         extra={"version": settings.VERSION, "project": settings.PROJECT_NAME},

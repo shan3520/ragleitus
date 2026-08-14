@@ -20,10 +20,15 @@ def upgrade():
     op.create_table(
         'documents',
         sa.Column('id', sa.Integer, primary_key=True),
+        sa.Column('user_id', sa.Integer, nullable=True),
         sa.Column('title', sa.String(length=255), nullable=False),
-        sa.Column('content', sa.Text(), nullable=False),
-        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('sha256', sa.String(length=64), nullable=True),
+        sa.Column('content', sa.Text(), nullable=True),
+        sa.Column('status', sa.String(length=50), nullable=False, server_default='pending'),
+        sa.Column('created_at', sa.DateTime(), nullable=True),
     )
+    op.create_index('ix_documents_user_id', 'documents', ['user_id'])
+    op.create_index('ix_documents_sha256', 'documents', ['sha256'])
 
     # Create chunks table
     op.create_table(
@@ -32,10 +37,14 @@ def upgrade():
         sa.Column('document_id', sa.Integer, sa.ForeignKey('documents.id', ondelete='CASCADE'), nullable=False),
         sa.Column('content', sa.Text(), nullable=False),
         sa.Column('sequence_order', sa.Integer, nullable=False),
-        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.Column('created_at', sa.DateTime(), nullable=True),
     )
+    op.create_index('ix_chunks_document_id', 'chunks', ['document_id'])
 
 
 def downgrade():
+    op.drop_index('ix_chunks_document_id', table_name='chunks')
     op.drop_table('chunks')
+    op.drop_index('ix_documents_sha256', table_name='documents')
+    op.drop_index('ix_documents_user_id', table_name='documents')
     op.drop_table('documents')

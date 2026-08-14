@@ -4,11 +4,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.main import app
+from app.core.middleware import rate_limiter
 from app.db.database import get_db
 from app.models import Base, ProviderKey
 
 
-def _setup_test_db():
+def _setup_test_db(username: str = "key_user"):
+    rate_limiter.reset()
     tf = tempfile.NamedTemporaryFile(delete=False)
     tf.close()
     db_url = f"sqlite:///{tf.name}"
@@ -24,15 +26,21 @@ def _setup_test_db():
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    return engine, TestingSessionLocal
+
+    client = TestClient(app)
+    client.post("/auth/register", json={"username": username, "password": "password123"})
+    login_resp = client.post("/auth/login", json={"username": username, "password": "password123"})
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    return client, headers, TestingSessionLocal
 
 
 def test_post_provider_key_stores_encrypted_value():
-    engine, TestingSessionLocal = _setup_test_db()
-    client = TestClient(app)
+    client, headers, TestingSessionLocal = _setup_test_db("user_pk1")
 
     payload = {"provider": "openai", "key": "sk-testkey1234567"}
-    resp = client.post("/provider-keys", json=payload)
+    resp = client.post("/provider-keys", json=payload, headers=headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "id" in data
@@ -47,15 +55,14 @@ def test_post_provider_key_stores_encrypted_value():
 
 
 def test_get_provider_keys_returns_masked_values():
-    _setup_test_db()
-    client = TestClient(app)
+    client, headers, _ = _setup_test_db("user_pk2")
 
     payload = {"provider": "openai", "key": "sk-testkey1234567"}
-    resp = client.post("/provider-keys", json=payload)
+    resp = client.post("/provider-keys", json=payload, headers=headers)
     assert resp.status_code == 200
     created_id = resp.json()["id"]
 
-    resp = client.get("/provider-keys")
+    resp = client.get("/provider-keys", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 1
@@ -67,33 +74,31 @@ def test_get_provider_keys_returns_masked_values():
 
 
 def test_delete_provider_key_removes_key():
-    _setup_test_db()
-    client = TestClient(app)
+    client, headers, _ = _setup_test_db("user_pk3")
 
     payload = {"provider": "openai", "key": "sk-testkey1234567"}
-    resp = client.post("/provider-keys", json=payload)
+    resp = client.post("/provider-keys", json=payload, headers=headers)
     assert resp.status_code == 200
     created_id = resp.json()["id"]
 
-    resp = client.get("/provider-keys")
+    resp = client.get("/provider-keys", headers=headers)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
 
-    resp = client.delete(f"/provider-keys/{created_id}")
+    resp = client.delete(f"/provider-keys/{created_id}", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["detail"] == "Provider key deleted"
 
-    resp = client.get("/provider-keys")
+    resp = client.get("/provider-keys", headers=headers)
     assert resp.status_code == 200
     assert len(resp.json()) == 0
     app.dependency_overrides.clear()
 
 
 def test_delete_nonexistent_provider_key_returns_404():
-    _setup_test_db()
-    client = TestClient(app)
+    client, headers, _ = _setup_test_db("user_pk4")
 
-    resp = client.delete("/provider-keys/999")
+    resp = client.delete("/provider-keys/999", headers=headers)
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Provider key not found"
     app.dependency_overrides.clear()

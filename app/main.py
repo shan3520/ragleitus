@@ -11,7 +11,9 @@ from app.db.database import Base, engine
 from app.api.health import router as health_router
 from app.api.provider_keys import router as provider_keys_router
 from app.api.auth import router as auth_router
+from app.api.stats import router as stats_router
 from app.api.search import router as search_router
+from app.api.evaluations import router as evaluations_router
 from app.api.documents import router as documents_router
 from app.api.cleaning import router as cleaning_router
 from app.api.chunking import router as chunking_router
@@ -58,7 +60,9 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(provider_keys_router)
     app.include_router(auth_router)
+    app.include_router(stats_router)
     app.include_router(search_router)
+    app.include_router(evaluations_router)
     app.include_router(documents_router)
     app.include_router(cleaning_router)
     app.include_router(chunking_router)

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.core.middleware import RequestIDMiddleware
+from app.core.middleware import RequestIDMiddleware, RateLimitMiddleware
 from app.db.database import Base, engine
 from app.api.health import router as health_router
 from app.api.provider_keys import router as provider_keys_router
@@ -50,8 +50,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Request tracing middleware
+    # Request tracing and rate limiting middleware
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(RateLimitMiddleware)
 
     app.include_router(health_router)
     app.include_router(provider_keys_router)

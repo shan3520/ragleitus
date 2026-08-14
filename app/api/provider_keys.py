@@ -4,7 +4,13 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.models import ProviderKey
-from app.services.provider_key import encrypt_key, save_provider_key, list_provider_keys, delete_provider_key
+from app.services.provider_key import (
+    encrypt_key,
+    save_provider_key,
+    list_provider_keys,
+    delete_provider_key,
+    mask_key,
+)
 from app.services.provider_validation import verify_provider_key
 
 router = APIRouter()
@@ -26,9 +32,7 @@ class ProviderKeyOut(BaseModel):
     @staticmethod
     def mask_key(key: str) -> str:
         """Mask the key for display (e.g., 'sk-***')."""
-        if len(key) > 3:
-            return key[:3] + "***"
-        return "***"
+        return mask_key(key)
 
 
 @router.post("/provider-keys")
@@ -39,6 +43,7 @@ def create_provider_key(payload: ProviderKeyIn, session: Session = Depends(get_d
         raise HTTPException(status_code=400, detail="invalid provider key")
     encrypted = encrypt_key(payload.key)
     pk = save_provider_key(session, payload.provider, encrypted)
+    session.commit()
     return {"id": pk.id, "provider": pk.provider}
 
 
@@ -62,4 +67,5 @@ def delete_provider_key_endpoint(key_id: int, session: Session = Depends(get_db)
     success = delete_provider_key(session, key_id)
     if not success:
         raise HTTPException(status_code=404, detail="Provider key not found")
+    session.commit()
     return {"detail": "Provider key deleted"}

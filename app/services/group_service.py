@@ -32,3 +32,14 @@ def delete_group(session: Session, group_id: int, hard_delete: bool = False) -> 
     session.delete(group)
     session.flush()
     return True
+
+def update_group(session: Session, group_id: int, name: str | None = None) -> Group | None:
+    group = session.query(Group).filter(Group.id == group_id).first()
+    if not group:
+        return None
+    
+    if name is not None:
+        group.name = name
+        
+    session.flush()
+    return group

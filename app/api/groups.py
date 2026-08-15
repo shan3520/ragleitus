@@ -15,6 +15,9 @@ class GroupOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class GroupUpdate(BaseModel):
+    name: str | None = None
+
 class GroupWithCount(GroupOut):
     document_count: int
 
@@ -43,3 +46,16 @@ def delete_group(
         raise HTTPException(status_code=404, detail="Group not found")
     session.commit()
     return None
+
+@router.patch("/{group_id}", response_model=GroupOut)
+def update_group(
+    group_id: int,
+    group_in: GroupUpdate,
+    session: Session = Depends(get_db)
+):
+    from fastapi import HTTPException
+    group = group_service.update_group(session, group_id, name=group_in.name)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    session.commit()
+    return group

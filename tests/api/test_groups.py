@@ -87,3 +87,20 @@ def test_list_groups():
     
     assert group_b["name"] == "Group B"
     assert group_b["document_count"] == 0
+
+def test_update_group():
+    client = TestClient(app)
+    
+    # Create group
+    response = client.post("/api/groups", json={"name": "Old Name"})
+    group_id = response.json()["id"]
+
+    # Update group
+    response = client.patch(f"/api/groups/{group_id}", json={"name": "New Name"})
+    assert response.status_code == 200
+    assert response.json()["name"] == "New Name"
+
+def test_update_group_not_found():
+    client = TestClient(app)
+    response = client.patch("/api/groups/9999", json={"name": "New Name"})
+    assert response.status_code == 404

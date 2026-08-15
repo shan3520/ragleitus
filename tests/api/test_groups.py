@@ -56,3 +56,34 @@ def test_delete_group_with_hard_delete():
     doc_in_db = db.query(Document).filter(Document.id == doc_id).first()
     assert doc_in_db is None
     db.close()
+
+def test_list_groups():
+    client = TestClient(app)
+    
+    # Create two groups
+    resp1 = client.post("/api/groups", json={"name": "Group A"})
+    group1_id = resp1.json()["id"]
+    resp2 = client.post("/api/groups", json={"name": "Group B"})
+    group2_id = resp2.json()["id"]
+    
+    # Add documents to Group A
+    db = SessionLocal()
+    db.add(Document(title="Doc 1", group_id=group1_id))
+    db.add(Document(title="Doc 2", group_id=group1_id))
+    db.commit()
+    db.close()
+    
+    # Fetch list
+    response = client.get("/api/groups")
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Verify groups and counts
+    group_a = next(g for g in data if g["id"] == group1_id)
+    group_b = next(g for g in data if g["id"] == group2_id)
+    
+    assert group_a["name"] == "Group A"
+    assert group_a["document_count"] == 2
+    
+    assert group_b["name"] == "Group B"
+    assert group_b["document_count"] == 0

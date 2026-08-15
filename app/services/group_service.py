@@ -1,6 +1,19 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.models.group import Group
 from app.models.document import Document
+
+def get_groups_with_document_count(session: Session):
+    return (
+        session.query(
+            Group.id, 
+            Group.name, 
+            func.count(Document.id).label("document_count")
+        )
+        .outerjoin(Document, Group.id == Document.group_id)
+        .group_by(Group.id)
+        .all()
+    )
 
 def create_group(session: Session, name: str) -> Group:
     group = Group(name=name)

@@ -15,6 +15,13 @@ class GroupOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class GroupWithCount(GroupOut):
+    document_count: int
+
+@router.get("", response_model=list[GroupWithCount])
+def list_groups(session: Session = Depends(get_db)):
+    return group_service.get_groups_with_document_count(session)
+
 @router.post("", response_model=GroupOut, status_code=status.HTTP_201_CREATED)
 def create_group(
     group_in: GroupCreate,

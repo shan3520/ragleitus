@@ -21,6 +21,7 @@ from app.api.export import router as export_router
 from app.api.batch_upload import router as batch_router
 from app.api.subsystem_health import router as subsystem_router
 from app.api.experiment_reports import router as reports_router
+from app.api.config_summary import router as config_summary_router
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(batch_router)
     app.include_router(subsystem_router)
     app.include_router(reports_router)
+    app.include_router(config_summary_router)
 
     return app
 

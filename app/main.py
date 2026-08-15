@@ -18,6 +18,7 @@ from app.api.documents import router as documents_router
 from app.api.cleaning import router as cleaning_router
 from app.api.chunking import router as chunking_router
 from app.api.export import router as export_router
+from app.api.batch_upload import router as batch_router
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(cleaning_router)
     app.include_router(chunking_router)
     app.include_router(export_router)
+    app.include_router(batch_router)
 
     return app
 

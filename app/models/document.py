@@ -13,7 +13,9 @@ class Document(Base):
     sha256 = Column(String(64), nullable=True, index=True)
     content = Column(Text, nullable=True)
     status = Column(String(50), nullable=False, default="pending")
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
 
+    group = relationship("Group", back_populates="documents")
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
 
 

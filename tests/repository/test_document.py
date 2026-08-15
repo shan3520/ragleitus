@@ -3,7 +3,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import IntegrityError
 
-from app.models import Base, Document, Chunk
+from app.models import Base, Document, Chunk, Group
 
 
 def setup_engine():
@@ -77,3 +77,35 @@ def test_cascade_delete():
     # Verify chunks are cascaded deleted
     deleted_chunks = session.query(Chunk).filter(Chunk.id.in_(chunk_ids)).all()
     assert len(deleted_chunks) == 0
+
+
+def test_group_cascade_set_null():
+    engine = setup_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    group = Group(name="Test Group")
+    doc1 = Document(title="Doc 1", content="Content 1", group=group)
+    doc2 = Document(title="Doc 2", content="Content 2", group=group)
+    session.add(group)
+    session.commit()
+
+    group_id = group.id
+    doc1_id = doc1.id
+    doc2_id = doc2.id
+
+    assert doc1.group_id == group_id
+    assert doc2.group_id == group_id
+
+    session.delete(group)
+    session.commit()
+
+    deleted_group = session.query(Group).filter(Group.id == group_id).first()
+    assert deleted_group is None
+
+    doc1_after = session.query(Document).filter(Document.id == doc1_id).one()
+    doc2_after = session.query(Document).filter(Document.id == doc2_id).one()
+    
+    assert doc1_after.group_id is None
+    assert doc2_after.group_id is None

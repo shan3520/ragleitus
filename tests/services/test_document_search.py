@@ -6,10 +6,11 @@ from app.services.document_search import generate_snippet, search_documents
 class _FakeDoc:
     """Minimal stand-in for a Document model instance."""
 
-    def __init__(self, doc_id: int, title: str, content: str):
+    def __init__(self, doc_id: int, title: str, content: str, group_id: int | str | None = None):
         self.id = doc_id
         self.title = title
         self.content = content
+        self.group_id = group_id
 
 
 def test_search_documents_empty_query():
@@ -49,3 +50,23 @@ def test_generate_snippet_centered():
 def test_generate_snippet_empty_inputs():
     assert generate_snippet("", "query") == ""
     assert generate_snippet("text", "") == "text"
+
+
+def test_search_documents_group_id_filter():
+    docs = [
+        _FakeDoc(1, "Python RAG", "Building Python retrieval", group_id=100),
+        _FakeDoc(2, "Python Guide", "FastAPI web framework with Python", group_id=200),
+        _FakeDoc(3, "Python Database", "SQLAlchemy ORM setup", group_id=100),
+    ]
+
+    matches = search_documents(docs, "Python", group_id=100)
+    assert len(matches) == 2
+    assert {m.document_id for m in matches} == {1, 3}
+
+    matches_200 = search_documents(docs, "Python", group_id=200)
+    assert len(matches_200) == 1
+    assert matches_200[0].document_id == 2
+
+    matches_none = search_documents(docs, "Python")
+    assert len(matches_none) == 3
+

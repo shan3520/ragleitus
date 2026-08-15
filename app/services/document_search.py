@@ -62,6 +62,8 @@ def search_documents(
     get_id: callable = lambda doc: getattr(doc, "id", 0),
     get_title: callable = lambda doc: getattr(doc, "title", ""),
     get_content: callable = lambda doc: getattr(doc, "content", "") or "",
+    group_id: int | str | None = None,
+    get_group_id: callable = lambda doc: getattr(doc, "group_id", None),
 ) -> list[SearchMatch]:
     """
     Perform a keyword search over documents, returning matches ordered by relevance.
@@ -89,6 +91,9 @@ def search_documents(
     matches: list[SearchMatch] = []
 
     for doc in documents:
+        if group_id is not None and get_group_id(doc) != group_id:
+            continue
+
         title = get_title(doc) or ""
         content = get_content(doc) or ""
 

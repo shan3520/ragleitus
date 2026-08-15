@@ -19,6 +19,7 @@ from app.api.cleaning import router as cleaning_router
 from app.api.chunking import router as chunking_router
 from app.api.export import router as export_router
 from app.api.batch_upload import router as batch_router
+from app.api.subsystem_health import router as subsystem_router
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(chunking_router)
     app.include_router(export_router)
     app.include_router(batch_router)
+    app.include_router(subsystem_router)
 
     return app
 

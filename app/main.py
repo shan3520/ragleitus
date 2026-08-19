@@ -23,6 +23,7 @@ from app.api.subsystem_health import router as subsystem_router
 from app.api.experiment_reports import router as reports_router
 from app.api.config_summary import router as config_summary_router
 from app.api.groups import router as groups_router
+from app.api.unanswered_queries import router as unanswered_queries_router
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
     app.include_router(reports_router)
     app.include_router(config_summary_router)
     app.include_router(groups_router, prefix="/api/groups")
+    app.include_router(unanswered_queries_router)
 
     return app
 

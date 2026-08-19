@@ -41,3 +41,34 @@ def test_search_documents_endpoint():
     assert len(results) == 1
     assert results[0]["title"] == "Architecture Guidelines"
     assert results[0]["score"] > 0
+
+
+def test_search_documents_endpoint_empty():
+    from app.models.document import UnmatchedSearch
+
+    unique_user = f"user_search_empty_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        initial_count = db.query(UnmatchedSearch).count()
+    finally:
+        db.close()
+
+    resp = client.get("/api/documents/search?q=NonExistentTerm", headers=headers)
+    assert resp.status_code == 200
+    results = resp.json()
+    assert len(results) == 0
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        final_count = db.query(UnmatchedSearch).count()
+        assert final_count == initial_count + 1
+
+        last_unmatched = db.query(UnmatchedSearch).order_by(UnmatchedSearch.id.desc()).first()
+        assert last_unmatched.query_text == "NonExistentTerm"
+        assert last_unmatched.timestamp is not None
+    finally:
+        db.close()

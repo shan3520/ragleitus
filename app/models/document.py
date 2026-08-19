@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Text
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, ForeignKey, Text, DateTime
 from sqlalchemy.orm import relationship
 
 from .evaluation import Base
@@ -30,4 +31,12 @@ class Chunk(Base):
     document = relationship("Document", back_populates="chunks")
 
 
-__all__ = ["Document", "Chunk"]
+class UnmatchedSearch(Base):
+    __tablename__ = "unmatched_searches"
+
+    id = Column(Integer, primary_key=True)
+    query_text = Column(String(255), nullable=False)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+__all__ = ["Document", "Chunk", "UnmatchedSearch"]

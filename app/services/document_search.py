@@ -55,6 +55,20 @@ def generate_snippet(text: str, query: str, max_length: int = 150) -> str:
 
     return f"{prefix}{text[start:end].strip()}{suffix}"
 
+from fastapi import BackgroundTasks
+from sqlalchemy.orm import Session
+from datetime import datetime, timezone
+from app.models.document import UnmatchedSearch
+
+
+def _log_unmatched_search(session: Session, query: str) -> None:
+    try:
+        unmatched = UnmatchedSearch(query_text=query, timestamp=datetime.now(timezone.utc))
+        session.add(unmatched)
+        session.commit()
+    except Exception:
+        pass
+
 
 def search_documents(
     documents: Sequence,
@@ -64,6 +78,8 @@ def search_documents(
     get_content: callable = lambda doc: getattr(doc, "content", "") or "",
     group_id: int | str | None = None,
     get_group_id: callable = lambda doc: getattr(doc, "group_id", None),
+    background_tasks: BackgroundTasks | None = None,
+    session: Session | None = None,
 ) -> list[SearchMatch]:
     """
     Perform a keyword search over documents, returning matches ordered by relevance.
@@ -115,4 +131,8 @@ def search_documents(
             )
 
     matches.sort(key=lambda m: m.score, reverse=True)
+    
+    if not matches and background_tasks and session:
+        background_tasks.add_task(_log_unmatched_search, session, query)
+        
     return matches

@@ -37,8 +37,25 @@ def test_search_documents_title_and_content_match():
 
 
 def test_search_documents_no_match():
+    class FakeBackgroundTasks:
+        def __init__(self):
+            self.tasks = []
+        def add_task(self, func, *args, **kwargs):
+            self.tasks.append((func, args, kwargs))
+
     docs = [_FakeDoc(1, "Title", "Content")]
+    bg_tasks = FakeBackgroundTasks()
+    
+    # Should not add task if background_tasks is not provided
     assert search_documents(docs, "nonexistent") == []
+    
+    # Should add task if background_tasks is provided
+    matches = search_documents(docs, "nonexistent", background_tasks=bg_tasks, session="fake_session")
+    assert matches == []
+    assert len(bg_tasks.tasks) == 1
+    func, args, kwargs = bg_tasks.tasks[0]
+    assert func.__name__ == "_log_unmatched_search"
+    assert args == ("fake_session", "nonexistent")
 
 
 def test_generate_snippet_centered():

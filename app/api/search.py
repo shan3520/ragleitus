@@ -1,13 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
-
-from datetime import datetime, timezone
 
 from app.api.auth import get_current_user
 from app.db.database import get_db
 from app.services.document_service import list_user_documents
 from app.services.document_search import search_documents
-from app.models.document import UnmatchedSearch
 
 router = APIRouter(tags=["search"])
 
@@ -15,6 +12,7 @@ router = APIRouter(tags=["search"])
 @router.get("/api/documents/search")
 def search_user_documents(
     q: str,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
@@ -25,12 +23,7 @@ def search_user_documents(
         raise HTTPException(status_code=400, detail="Search query must not be empty")
 
     docs = list_user_documents(session, user["username"])
-    matches = search_documents(docs, q)
-
-    if not matches:
-        unmatched = UnmatchedSearch(query_text=q, timestamp=datetime.now(timezone.utc))
-        session.add(unmatched)
-        session.commit()
+    matches = search_documents(docs, q, background_tasks=background_tasks, session=session)
 
     return [
         {

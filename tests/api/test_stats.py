@@ -61,7 +61,7 @@ def test_popular_searches_endpoint():
     finally:
         db.close()
 
-    resp = client.get("/api/stats/popular-searches?limit=10", headers=headers)
+    resp = client.get("/api/stats/popular-searches?limit=1000", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) >= 1
@@ -93,7 +93,7 @@ def test_popular_documents_endpoint():
     finally:
         db.close()
 
-    resp = client.get("/api/stats/popular-documents?limit=10", headers=headers)
+    resp = client.get("/api/stats/popular-documents?limit=1000", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) >= 1

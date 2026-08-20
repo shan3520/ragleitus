@@ -105,7 +105,7 @@ def test_top_negative_feedback_queries_endpoint():
     finally:
         db.close()
 
-    resp = client.get("/api/feedback/top-negative-queries?limit=10", headers=headers)
+    resp = client.get("/api/feedback/top-negative-queries?limit=100", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
     

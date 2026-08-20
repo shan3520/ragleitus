@@ -41,3 +41,6 @@ def test_document_stats_endpoint():
     assert data["total_documents"] == 1
     assert data["total_chunks"] == 2
     assert data["avg_chunks_per_document"] == 2.0
+    assert "search_analytics" in data
+    assert "top_queries" in data["search_analytics"]
+    assert "top_documents" in data["search_analytics"]

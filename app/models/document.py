@@ -20,6 +20,7 @@ class Document(Base):
 
     group = relationship("Group", back_populates="documents")
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
+    feedbacks = relationship("SearchFeedback", secondary="document_feedback", back_populates="documents", cascade="all, delete")
 
 
 class Chunk(Base):

@@ -36,3 +36,43 @@ def test_insert_search_feedback(session):
     assert db_feedback.comment == "Great search result!"
     assert db_feedback.created_at is not None
     assert db_feedback.search_log.query_text == "what is rag"
+
+def test_document_feedback_relationship_and_cascade(session):
+    from app.models.document import Document
+    from app.models.feedback import document_feedback
+
+    query_log = SearchQueryLog(query_text="cascade test")
+    session.add(query_log)
+    
+    doc = Document(title="Cascade Doc", status="ready")
+    session.add(doc)
+    
+    feedback = SearchFeedback(
+        search_log=query_log,
+        is_positive=True,
+        comment="Needs cascade",
+        documents=[doc]
+    )
+    session.add(feedback)
+    session.commit()
+
+    # Verify relationship works both ways
+    assert len(doc.feedbacks) == 1
+    assert doc.feedbacks[0].comment == "Needs cascade"
+    assert len(feedback.documents) == 1
+    assert feedback.documents[0].title == "Cascade Doc"
+
+    doc_id = doc.id
+    feedback_id = feedback.id
+
+    # Verify the link exists
+    res = session.execute(document_feedback.select().where(document_feedback.c.document_id == doc_id)).fetchall()
+    assert len(res) == 1
+
+    # Now verify cascade behavior: removing a Document removes the link
+    session.delete(doc)
+    session.commit()
+
+    # Verify the link is removed
+    res = session.execute(document_feedback.select().where(document_feedback.c.document_id == doc_id)).fetchall()
+    assert len(res) == 0

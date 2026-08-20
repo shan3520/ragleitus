@@ -46,3 +46,13 @@ def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end
     
     clusters.sort(key=lambda x: x["count"], reverse=True)
     return clusters
+
+def mark_cluster_handled(db: Session, cluster_id: int, document_id: int):
+    from app.models.query_cluster import QueryCluster
+    cluster = db.query(QueryCluster).filter(QueryCluster.id == cluster_id).first()
+    if cluster:
+        cluster.status = "handled"
+        cluster.resolved_by_document_id = document_id
+        cluster.resolved_at = datetime.utcnow()
+        db.commit()
+    return cluster

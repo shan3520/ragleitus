@@ -124,3 +124,45 @@ def test_clustered_unanswered_queries_auth():
     client = TestClient(app)
     resp = client.get("/api/unanswered-queries/clustered")
     assert resp.status_code == 401
+
+def test_mark_cluster_handled_api():
+    unique_user = f"user_cluster_patch_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.query_cluster import QueryCluster
+        from app.models.document import Document
+        
+        doc = Document(user_id=unique_user, title="Test Doc", content="Content", status="completed")
+        db.add(doc)
+        db.commit()
+        
+        cluster = QueryCluster(status="open")
+        db.add(cluster)
+        db.commit()
+        
+        cluster_id = cluster.id
+        doc_id = doc.id
+        
+        resp = client.patch(f"/api/unanswered-queries/clusters/{cluster_id}", json={"document_id": doc_id}, headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["message"] == "Cluster marked as handled"
+        assert data["status"] == "handled"
+        assert data["document_id"] == doc_id
+        
+        resp_404 = client.patch(f"/api/unanswered-queries/clusters/{cluster_id}", json={"document_id": 99999}, headers=headers)
+        assert resp_404.status_code == 404
+        
+        other_doc = Document(user_id="other_user", title="Other", content="Other", status="completed")
+        db.add(other_doc)
+        db.commit()
+        other_doc_id = other_doc.id
+        
+        resp_404_other = client.patch(f"/api/unanswered-queries/clusters/{cluster_id}", json={"document_id": other_doc_id}, headers=headers)
+        assert resp_404_other.status_code == 404
+        
+    finally:
+        db.close()

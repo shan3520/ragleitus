@@ -121,3 +121,27 @@ def get_clustered_queries(
         )
         for c in clusters
     ]
+
+class MarkClusterHandledRequest(BaseModel):
+    document_id: int
+
+@router.patch("/clusters/{cluster_id}")
+def mark_cluster(
+    cluster_id: int,
+    payload: MarkClusterHandledRequest,
+    session: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from app.services.document_service import get_user_document
+    from fastapi import HTTPException
+    
+    doc = get_user_document(session, payload.document_id, user["username"])
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    from app.services.query_clustering import mark_cluster_handled
+    cluster = mark_cluster_handled(session, cluster_id, payload.document_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+        
+    return {"message": "Cluster marked as handled", "cluster_id": cluster.id, "status": cluster.status, "document_id": cluster.resolved_by_document_id}

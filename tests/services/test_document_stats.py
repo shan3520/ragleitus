@@ -85,3 +85,41 @@ def test_compute_document_stats_with_staleness(mock_score):
     assert result.total_documents == 2
     assert result.max_staleness_score == 50.0
     assert result.avg_staleness_score == 30.0
+
+@patch("app.services.document_stats.calculate_document_disappointment_ratio")
+@patch("app.services.document_stats.compute_staleness_score")
+def test_compute_document_stats_with_disappointment(mock_staleness, mock_ratio):
+    mock_staleness.return_value = 0.0
+    mock_ratio.side_effect = [0.1, 0.5]
+    docs = [
+        _FakeDoc(status="indexed", content="abc", num_chunks=1),
+        _FakeDoc(status="indexed", content="def", num_chunks=1),
+    ]
+    
+    result = compute_document_stats(docs, db="fake_db")
+    
+    assert mock_ratio.call_count == 2
+    assert result.max_disappointment_ratio == 0.5
+    assert result.avg_disappointment_ratio == 0.3
+
+def test_calculate_document_disappointment_ratio_division_by_zero():
+    from app.services.document_stats import calculate_document_disappointment_ratio
+    from unittest.mock import Mock
+    
+    mock_db = Mock()
+    # Mocking a chain of calls like db.query().join().filter().scalar()
+    # We want retrievals scalar to return 0
+    mock_db.query.return_value.join.return_value.filter.return_value.scalar.side_effect = [5, 0] 
+    
+    ratio = calculate_document_disappointment_ratio(mock_db, 1)
+    assert ratio == 0.0
+
+def test_calculate_document_disappointment_ratio_valid():
+    from app.services.document_stats import calculate_document_disappointment_ratio
+    from unittest.mock import Mock
+    
+    mock_db = Mock()
+    mock_db.query.return_value.join.return_value.filter.return_value.scalar.side_effect = [1, 4] 
+    
+    ratio = calculate_document_disappointment_ratio(mock_db, 1)
+    assert ratio == 0.25

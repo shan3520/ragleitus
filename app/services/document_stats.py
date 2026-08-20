@@ -24,6 +24,46 @@ class DocumentStats:
     total_content_length: int
     max_staleness_score: float = 0.0
     avg_staleness_score: float = 0.0
+    max_disappointment_ratio: float = 0.0
+    avg_disappointment_ratio: float = 0.0
+
+
+def calculate_document_disappointment_ratio(db, document_id: int, days: int = 30) -> float:
+    if not db or document_id is None:
+        return 0.0
+
+    from sqlalchemy import func
+    from datetime import datetime, timedelta, timezone
+    from app.models.feedback import SearchFeedback, document_feedback
+    from app.models.document import DocumentRetrievalLog, SearchQueryLog
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    neg_feedbacks = (
+        db.query(func.count(SearchFeedback.id))
+        .join(document_feedback, SearchFeedback.id == document_feedback.c.search_feedback_id)
+        .filter(
+            document_feedback.c.document_id == document_id,
+            SearchFeedback.is_positive == False,
+            SearchFeedback.created_at >= cutoff
+        )
+        .scalar() or 0
+    )
+
+    retrievals = (
+        db.query(func.count(DocumentRetrievalLog.id))
+        .join(SearchQueryLog, DocumentRetrievalLog.query_log_id == SearchQueryLog.id)
+        .filter(
+            DocumentRetrievalLog.document_id == document_id,
+            SearchQueryLog.timestamp >= cutoff
+        )
+        .scalar() or 0
+    )
+
+    if retrievals == 0:
+        return 0.0
+
+    return neg_feedbacks / retrievals
 
 
 def compute_document_stats(
@@ -62,6 +102,8 @@ def compute_document_stats(
     status_counts: dict[str, int] = {}
     max_staleness = 0.0
     total_staleness = 0.0
+    max_disappointment = 0.0
+    total_disappointment = 0.0
 
     for doc in documents:
         chunks = get_chunks(doc)
@@ -78,8 +120,15 @@ def compute_document_stats(
         if staleness > max_staleness:
             max_staleness = staleness
 
+        doc_id = getattr(doc, "id", None)
+        ratio = calculate_document_disappointment_ratio(db, doc_id)
+        total_disappointment += ratio
+        if ratio > max_disappointment:
+            max_disappointment = ratio
+
     avg_chunks = round(total_chunks / total_documents, 2)
     avg_staleness = round(total_staleness / total_documents, 2)
+    avg_disappointment = round(total_disappointment / total_documents, 2)
 
     return DocumentStats(
         total_documents=total_documents,
@@ -89,4 +138,6 @@ def compute_document_stats(
         total_content_length=total_content_length,
         max_staleness_score=max_staleness,
         avg_staleness_score=avg_staleness,
+        max_disappointment_ratio=max_disappointment,
+        avg_disappointment_ratio=avg_disappointment,
     )

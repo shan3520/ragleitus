@@ -87,7 +87,7 @@ def test_popular_documents_endpoint():
         db.add(log)
         db.commit()
         
-        rs = [DocumentRetrievalLog(query_log_id=log.id, document_id=doc_id) for _ in range(5)]
+        rs = [DocumentRetrievalLog(query_log_id=log.id, document_id=doc_id) for _ in range(100)]
         db.add_all(rs)
         db.commit()
     finally:
@@ -97,4 +97,4 @@ def test_popular_documents_endpoint():
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) >= 1
-    assert any(d["document_id"] == doc_id and d["count"] >= 5 for d in data)
+    assert any(d["document_id"] == doc_id and d["count"] >= 100 for d in data)

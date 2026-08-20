@@ -46,6 +46,7 @@ class SearchQueryLog(Base):
 
     id = Column(Integer, primary_key=True)
     query_text = Column(String(255), nullable=False, index=True)
+    generated_answer = Column(Text, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     retrievals = relationship("DocumentRetrievalLog", back_populates="query_log", cascade="all, delete-orphan")

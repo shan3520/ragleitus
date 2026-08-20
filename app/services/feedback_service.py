@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 
 from app.models.feedback import SearchFeedback
 from app.models.document import SearchQueryLog
@@ -27,6 +27,28 @@ def get_recent_negative_feedback(db: Session, limit: int = 10):
             "generated_answer": r.generated_answer,
             "comment": r.comment,
             "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in results
+    ]
+
+def get_top_negative_feedback_queries(db: Session, limit: int = 10):
+    results = (
+        db.query(
+            SearchQueryLog.query_text,
+            func.count(SearchFeedback.id).label("negative_count")
+        )
+        .join(SearchFeedback, SearchFeedback.search_log_id == SearchQueryLog.id)
+        .filter(SearchFeedback.is_positive == False)
+        .group_by(SearchQueryLog.query_text)
+        .order_by(desc("negative_count"))
+        .limit(limit)
+        .all()
+    )
+    
+    return [
+        {
+            "query_text": r.query_text,
+            "count": r.negative_count
         }
         for r in results
     ]

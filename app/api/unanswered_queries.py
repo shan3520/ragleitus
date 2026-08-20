@@ -75,7 +75,20 @@ def get_frequent_queries(
     ]
 
 
-@router.get("/clustered")
+from pydantic import BaseModel
+from typing import List, Optional
+from datetime import datetime
+
+class Timeframe(BaseModel):
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+class ClusteredQueryResponse(BaseModel):
+    canonical_query: str
+    volume_count: int
+    timeframe: Timeframe
+
+@router.get("/clustered", response_model=List[ClusteredQueryResponse])
 def get_clustered_queries(
     start: str | None = Query(None, description="Start date (ISO format)"),
     end: str | None = Query(None, description="End date (ISO format)"),
@@ -86,8 +99,6 @@ def get_clustered_queries(
     """
     Get unmatched queries clustered by similarity.
     """
-    from datetime import datetime
-    
     start_dt = None
     end_dt = None
     
@@ -100,13 +111,13 @@ def get_clustered_queries(
     
     clusters = cluster_unmatched_queries(session, start_dt, end_dt, threshold)
     
-    # We might not want to return the full list of queries in the cluster to keep response clean,
-    # but the task didn't specify exactly. I'll include canonical_query and count.
+    timeframe = Timeframe(start=start, end=end)
+    
     return [
-        {
-            "canonical_query": c["canonical_query"],
-            "count": c["count"],
-            "queries": c["queries"],
-        }
+        ClusteredQueryResponse(
+            canonical_query=c["canonical_query"],
+            volume_count=c["count"],
+            timeframe=timeframe
+        )
         for c in clusters
     ]

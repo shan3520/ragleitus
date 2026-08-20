@@ -106,19 +106,21 @@ def test_clustered_unanswered_queries():
     finally:
         db.close()
 
-    resp = client.get("/api/unanswered-queries/clustered?threshold=0.3", headers=headers)
+    resp = client.get("/api/unanswered-queries/clustered?threshold=0.3&start=2023-01-01T00:00:00&end=2023-01-06T00:00:00", headers=headers)
     assert resp.status_code == 200
     results = resp.json()
     
     # Check that we have clustered something
-    # "how to reset password", "reset password", "forgot password" likely share "password"
-    # "apple", "apples" might not share much if jaccard is exact words, wait:
-    # "how to reset password" -> how, to, reset, password
-    # "reset password" -> reset, password (jaccard with above is 2/4 = 0.5)
-    # "forgot password" -> forgot, password (jaccard with above is 1/3 = 0.33)
-    # "apple" vs "apples" -> no shared words. So these are separate clusters.
     assert len(results) > 0
     # Let's ensure the format is correct
     assert "canonical_query" in results[0]
-    assert "count" in results[0]
-    assert "queries" in results[0]
+    assert "volume_count" in results[0]
+    assert "timeframe" in results[0]
+    assert results[0]["timeframe"]["start"] == "2023-01-01T00:00:00"
+    assert results[0]["timeframe"]["end"] == "2023-01-06T00:00:00"
+    assert "queries" not in results[0]
+
+def test_clustered_unanswered_queries_auth():
+    client = TestClient(app)
+    resp = client.get("/api/unanswered-queries/clustered")
+    assert resp.status_code == 401

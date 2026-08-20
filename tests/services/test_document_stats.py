@@ -214,3 +214,63 @@ def test_document_retrieved_after_cutoff_is_excluded(db_session):
     result_ids = [doc.id for doc in result]
     assert untouched_doc.id in result_ids
     assert retrieved_doc.id not in result_ids
+
+
+def test_documents_straddling_n_day_cutoff_only_older_returned(db_session):
+    """A document created slightly newer than the N-day cutoff is still
+    inside its fair chance window; only the older one may be unsearched."""
+    now = datetime.utcnow()
+    newer_doc = Document(
+        title="Just uploaded", status="ready", created_at=now - timedelta(days=29)
+    )
+    older_doc = Document(
+        title="Settled doc", status="ready", created_at=now - timedelta(days=31)
+    )
+    db_session.add_all([newer_doc, older_doc])
+    _add_search_log(db_session, "activity query", now)
+
+    result = get_unsearched_documents(db_session, days=30)
+
+    result_ids = [doc.id for doc in result]
+    assert result_ids == [older_doc.id]
+    assert newer_doc.id not in result_ids
+
+
+def test_retrieval_exactly_on_oldest_day_of_window_excludes_document(db_session):
+    """A document retrieved exactly on the oldest day of the analysis window
+    counts as searched (the window is inclusive), so it must not be listed."""
+    frozen_now = datetime.utcnow()
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def utcnow(cls):
+            return frozen_now
+
+    doc = Document(
+        title="Boundary doc", status="ready", created_at=frozen_now - timedelta(days=60)
+    )
+    db_session.add(doc)
+    db_session.commit()
+
+    boundary_log = _add_search_log(
+        db_session, "boundary query", frozen_now - timedelta(days=30)
+    )
+    _add_search_log(db_session, "inner query", frozen_now - timedelta(days=1))
+    db_session.add(
+        DocumentRetrievalLog(query_log_id=boundary_log.id, document_id=doc.id)
+    )
+    db_session.commit()
+
+    with patch("app.services.document_stats.datetime", _FrozenDatetime):
+        result = get_unsearched_documents(db_session, days=30)
+
+    assert [d.id for d in result] == []
+
+
+def test_window_with_zero_search_logs_raises_error(db_session):
+    """A requested window containing zero SearchQueryLog rows must raise
+    NoSearchActivityError even when other windows do have activity."""
+    _add_search_log(db_session, "old query", datetime.utcnow() - timedelta(days=90))
+
+    with pytest.raises(NoSearchActivityError):
+        get_unsearched_documents(db_session, days=7)

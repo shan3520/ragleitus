@@ -18,6 +18,16 @@ def _get_authenticated_client(username: str):
 
 
 def test_document_stats_endpoint():
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import Document, Chunk
+        db.query(Chunk).delete()
+        db.query(Document).delete()
+        db.commit()
+    finally:
+        db.close()
+
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
 
@@ -35,17 +45,37 @@ def test_document_stats_endpoint():
     finally:
         db.close()
 
-    resp = client.get("/api/documents/stats", headers=headers)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total_documents"] == 1
-    assert data["total_chunks"] == 2
-    assert data["avg_chunks_per_document"] == 2.0
-    assert "search_analytics" in data
-    assert "top_queries" in data["search_analytics"]
-    assert "top_documents" in data["search_analytics"]
+    try:
+        resp = client.get("/api/documents/stats", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_documents"] == 1
+        assert data["total_chunks"] == 2
+        assert data["avg_chunks_per_document"] == 2.0
+        assert "search_analytics" in data
+        assert "top_queries" in data["search_analytics"]
+        assert "top_documents" in data["search_analytics"]
+    finally:
+        db_gen = get_db()
+        cleanup_db = next(db_gen)
+        try:
+            from app.models.document import Document, Chunk
+            cleanup_db.query(Chunk).delete()
+            cleanup_db.query(Document).delete()
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()
 
 def test_popular_searches_endpoint():
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog
+        db.query(SearchQueryLog).delete()
+        db.commit()
+    finally:
+        db.close()
+
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
 
@@ -61,13 +91,35 @@ def test_popular_searches_endpoint():
     finally:
         db.close()
 
-    resp = client.get("/api/stats/popular-searches?limit=1000", headers=headers)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) >= 1
-    assert any(d["query"] == "popular_query" and d["count"] >= 5 for d in data)
+    try:
+        resp = client.get("/api/stats/popular-searches?limit=1000", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) >= 1
+        assert any(d["query"] == "popular_query" and d["count"] >= 5 for d in data)
+    finally:
+        db_gen = get_db()
+        cleanup_db = next(db_gen)
+        try:
+            from app.models.document import SearchQueryLog
+            cleanup_db.query(SearchQueryLog).delete()
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()
 
 def test_popular_documents_endpoint():
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document, Chunk
+        db.query(DocumentRetrievalLog).delete()
+        db.query(SearchQueryLog).delete()
+        db.query(Chunk).delete()
+        db.query(Document).delete()
+        db.commit()
+    finally:
+        db.close()
+
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
 
@@ -93,8 +145,21 @@ def test_popular_documents_endpoint():
     finally:
         db.close()
 
-    resp = client.get("/api/stats/popular-documents?limit=1000", headers=headers)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) >= 1
-    assert any(d["document_id"] == doc_id and d["count"] >= 100 for d in data)
+    try:
+        resp = client.get("/api/stats/popular-documents?limit=1000", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) >= 1
+        assert any(d["document_id"] == doc_id and d["count"] >= 100 for d in data)
+    finally:
+        db_gen = get_db()
+        cleanup_db = next(db_gen)
+        try:
+            from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document, Chunk
+            cleanup_db.query(DocumentRetrievalLog).delete()
+            cleanup_db.query(SearchQueryLog).delete()
+            cleanup_db.query(Chunk).delete()
+            cleanup_db.query(Document).delete()
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()

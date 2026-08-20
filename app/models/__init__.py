@@ -3,5 +3,6 @@ from .provider_key import ProviderKey
 from .document import Document, Chunk
 from .group import Group
 from .feedback import SearchFeedback
+from .query_cluster import QueryCluster
 
-__all__ = ["Base", "Prompt", "Experiment", "Evaluation", "ProviderKey", "Document", "Chunk", "Group", "SearchFeedback"]
+__all__ = ["Base", "Prompt", "Experiment", "Evaluation", "ProviderKey", "Document", "Chunk", "Group", "SearchFeedback", "QueryCluster"]

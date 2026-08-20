@@ -73,3 +73,40 @@ def get_frequent_queries(
         }
         for q in queries
     ]
+
+
+@router.get("/clustered")
+def get_clustered_queries(
+    start: str | None = Query(None, description="Start date (ISO format)"),
+    end: str | None = Query(None, description="End date (ISO format)"),
+    threshold: float = Query(0.5, ge=0.0, le=1.0),
+    session: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Get unmatched queries clustered by similarity.
+    """
+    from datetime import datetime
+    
+    start_dt = None
+    end_dt = None
+    
+    if start:
+        start_dt = datetime.fromisoformat(start)
+    if end:
+        end_dt = datetime.fromisoformat(end)
+        
+    from app.services.query_clustering import cluster_unmatched_queries
+    
+    clusters = cluster_unmatched_queries(session, start_dt, end_dt, threshold)
+    
+    # We might not want to return the full list of queries in the cluster to keep response clean,
+    # but the task didn't specify exactly. I'll include canonical_query and count.
+    return [
+        {
+            "canonical_query": c["canonical_query"],
+            "count": c["count"],
+            "queries": c["queries"],
+        }
+        for c in clusters
+    ]

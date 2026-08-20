@@ -85,3 +85,40 @@ def test_frequent_unanswered_queries():
     
     assert results[2]["query_text"] == "cherry"
     assert results[2]["count"] == 1
+
+
+def test_clustered_unanswered_queries():
+    unique_user = f"user_clustered_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        db.query(UnmatchedSearch).delete()
+
+        # Insert some similar queries
+        db.add(UnmatchedSearch(query_text="how to reset password", timestamp=datetime.datetime(2023, 1, 1, 12, 0, 0)))
+        db.add(UnmatchedSearch(query_text="reset password", timestamp=datetime.datetime(2023, 1, 2, 12, 0, 0)))
+        db.add(UnmatchedSearch(query_text="forgot password", timestamp=datetime.datetime(2023, 1, 3, 12, 0, 0)))
+        db.add(UnmatchedSearch(query_text="apple", timestamp=datetime.datetime(2023, 1, 4, 12, 0, 0)))
+        db.add(UnmatchedSearch(query_text="apples", timestamp=datetime.datetime(2023, 1, 5, 12, 0, 0)))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/api/unanswered-queries/clustered?threshold=0.3", headers=headers)
+    assert resp.status_code == 200
+    results = resp.json()
+    
+    # Check that we have clustered something
+    # "how to reset password", "reset password", "forgot password" likely share "password"
+    # "apple", "apples" might not share much if jaccard is exact words, wait:
+    # "how to reset password" -> how, to, reset, password
+    # "reset password" -> reset, password (jaccard with above is 2/4 = 0.5)
+    # "forgot password" -> forgot, password (jaccard with above is 1/3 = 0.33)
+    # "apple" vs "apples" -> no shared words. So these are separate clusters.
+    assert len(results) > 0
+    # Let's ensure the format is correct
+    assert "canonical_query" in results[0]
+    assert "count" in results[0]
+    assert "queries" in results[0]

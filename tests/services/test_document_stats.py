@@ -123,3 +123,94 @@ def test_calculate_document_disappointment_ratio_valid():
     
     ratio = calculate_document_disappointment_ratio(mock_db, 1)
     assert ratio == 0.25
+
+
+from datetime import datetime, timedelta
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.core.errors import NoSearchActivityError
+from app.models import Base
+from app.models.document import Document, DocumentRetrievalLog, SearchQueryLog
+from app.services.document_stats import get_unsearched_documents
+
+
+@pytest.fixture()
+def db_session():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+    yield session
+    session.close()
+    engine.dispose()
+
+
+def _add_search_log(session, query_text, timestamp):
+    log = SearchQueryLog(query_text=query_text, timestamp=timestamp)
+    session.add(log)
+    session.commit()
+    return log
+
+
+def test_no_search_activity_raises_error(db_session):
+    """With zero SearchQueryLog entries since the cutoff, the service must
+    raise NoSearchActivityError instead of returning a (meaningless) list."""
+    # Case 1: no search logs at all.
+    with pytest.raises(NoSearchActivityError):
+        get_unsearched_documents(db_session, days=30)
+
+    # Case 2: a search log exists, but it predates the cutoff, so there is
+    # still no activity within the window.
+    stale_timestamp = datetime.utcnow() - timedelta(days=60)
+    _add_search_log(db_session, "stale query", stale_timestamp)
+    with pytest.raises(NoSearchActivityError):
+        get_unsearched_documents(db_session, days=30)
+
+
+def test_document_created_after_cutoff_is_excluded(db_session):
+    """A document created after the cutoff date must never appear in the
+    unsearched documents list, even though it has no retrievals."""
+    now = datetime.utcnow()
+    recent_doc = Document(
+        title="Recent doc", status="ready", created_at=now - timedelta(days=1)
+    )
+    old_doc = Document(
+        title="Old doc", status="ready", created_at=now - timedelta(days=60)
+    )
+    db_session.add_all([recent_doc, old_doc])
+    _add_search_log(db_session, "recent query", now)
+
+    result = get_unsearched_documents(db_session, days=30)
+
+    result_ids = [doc.id for doc in result]
+    assert old_doc.id in result_ids
+    assert recent_doc.id not in result_ids
+
+
+def test_document_retrieved_after_cutoff_is_excluded(db_session):
+    """A document retrieved in a search after the cutoff must not appear in
+    the unsearched documents list."""
+    now = datetime.utcnow()
+    long_ago = now - timedelta(days=60)
+    retrieved_doc = Document(
+        title="Recently retrieved", status="ready", created_at=long_ago
+    )
+    untouched_doc = Document(
+        title="Never retrieved", status="ready", created_at=long_ago
+    )
+    db_session.add_all([retrieved_doc, untouched_doc])
+    db_session.commit()
+
+    log = _add_search_log(db_session, "recent query", now)
+    db_session.add(
+        DocumentRetrievalLog(query_log_id=log.id, document_id=retrieved_doc.id)
+    )
+    db_session.commit()
+
+    result = get_unsearched_documents(db_session, days=30)
+
+    result_ids = [doc.id for doc in result]
+    assert untouched_doc.id in result_ids
+    assert retrieved_doc.id not in result_ids

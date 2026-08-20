@@ -15,6 +15,7 @@ class Document(Base):
     content = Column(Text, nullable=True)
     status = Column(String(50), nullable=False, default="pending")
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=True)
     last_reviewed_at = Column(DateTime, nullable=True)
     review_status = Column(String(50), nullable=True)
 

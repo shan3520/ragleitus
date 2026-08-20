@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.core.errors import NoSearchActivityError
 from app.db.database import get_db
 from app.services.document_service import list_user_documents
-from app.services.document_stats import compute_document_stats, calculate_document_disappointment_ratio
+from app.services.document_stats import compute_document_stats, calculate_document_disappointment_ratio, get_unsearched_documents
 from app.services.usage_analytics import get_search_analytics, get_popular_searches, get_popular_documents
 from pydantic import BaseModel
 from typing import List
@@ -109,3 +110,29 @@ def api_underperforming_documents(
             
     result.sort(key=lambda x: x.disappointment_ratio, reverse=True)
     return result
+
+
+@router.get("/api/stats/unsearched-documents")
+def api_unsearched_documents(
+    user: dict = Depends(get_current_user),
+    days: int = 30,
+    db: Session = Depends(get_db),
+):
+    """
+    Get documents that existed before the cutoff and were not retrieved in
+    any search within the last ``days`` days.
+    """
+    try:
+        documents = get_unsearched_documents(db, days)
+    except NoSearchActivityError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return [
+        {
+            "id": doc.id,
+            "title": doc.title,
+            "status": doc.status,
+            "created_at": doc.created_at,
+        }
+        for doc in documents
+    ]

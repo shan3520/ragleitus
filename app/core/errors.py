@@ -7,3 +7,8 @@ def format_error_response(message: str, code: str = "GENERIC_ERROR", status_code
             "status_code": status_code,
         }
     }
+
+
+class NoSearchActivityError(Exception):
+    """Raised when there have been no searches in the requested time window."""
+    pass

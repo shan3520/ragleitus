@@ -8,8 +8,13 @@ instances so the caller (API layer) is responsible for session management.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Sequence
 
+from sqlalchemy import func
+
+from app.core.errors import NoSearchActivityError
+from app.models.document import Document, DocumentRetrievalLog, SearchQueryLog
 from app.services.staleness_scoring import compute_staleness_score
 
 
@@ -64,6 +69,46 @@ def calculate_document_disappointment_ratio(db, document_id: int, days: int = 30
         return 0.0
 
     return neg_feedbacks / retrievals
+
+
+def get_unsearched_documents(session, days: int):
+    """
+    Return documents created before the cutoff that were not retrieved
+    in any search within the last ``days`` days.
+
+    Raises NoSearchActivityError if there were no searches at all in the
+    window, because a lack of retrievals is only meaningful when the
+    system is actually being used.
+    """
+    cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+    recent_search_count = (
+        session.query(func.count(SearchQueryLog.id))
+        .filter(SearchQueryLog.timestamp >= cutoff_date)
+        .scalar()
+    )
+    if not recent_search_count:
+        raise NoSearchActivityError(
+            f"No search activity in the last {days} days; "
+            "unsearched documents cannot be determined."
+        )
+
+    recently_retrieved_ids = (
+        session.query(DocumentRetrievalLog.document_id)
+        .join(SearchQueryLog, DocumentRetrievalLog.query_log_id == SearchQueryLog.id)
+        .filter(SearchQueryLog.timestamp >= cutoff_date)
+        .subquery()
+    )
+
+    return (
+        session.query(Document)
+        .filter(
+            Document.created_at < cutoff_date,
+            ~Document.id.in_(recently_retrieved_ids.select()),
+        )
+        .order_by(Document.created_at.desc())
+        .all()
+    )
 
 
 def compute_document_stats(

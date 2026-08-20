@@ -23,6 +23,11 @@ if DATABASE_URL.startswith("sqlite"):
             conn.execute(text("ALTER TABLE query_clusters ADD COLUMN last_resolved_query_timestamp DATETIME"))
     except Exception:
         pass
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE documents ADD COLUMN created_at DATETIME"))
+    except Exception:
+        pass
 
 
 def get_db():

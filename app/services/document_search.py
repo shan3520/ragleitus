@@ -58,13 +58,28 @@ def generate_snippet(text: str, query: str, max_length: int = 150) -> str:
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
-from app.models.document import UnmatchedSearch
+from app.models.document import UnmatchedSearch, SearchQueryLog, DocumentRetrievalLog
 
 
 def _log_unmatched_search(session: Session, query: str) -> None:
     try:
         unmatched = UnmatchedSearch(query_text=query, timestamp=datetime.now(timezone.utc))
         session.add(unmatched)
+        session.commit()
+    except Exception:
+        pass
+
+
+def _log_search(session: Session, query: str, matched_doc_ids: list[int]) -> None:
+    try:
+        query_log = SearchQueryLog(query_text=query, timestamp=datetime.now(timezone.utc))
+        session.add(query_log)
+        session.flush()
+        
+        for doc_id in matched_doc_ids:
+            retrieval_log = DocumentRetrievalLog(query_log_id=query_log.id, document_id=doc_id)
+            session.add(retrieval_log)
+        
         session.commit()
     except Exception:
         pass
@@ -132,7 +147,11 @@ def search_documents(
 
     matches.sort(key=lambda m: m.score, reverse=True)
     
-    if not matches and background_tasks and session:
-        background_tasks.add_task(_log_unmatched_search, session, query)
+    if background_tasks and session:
+        if not matches:
+            background_tasks.add_task(_log_unmatched_search, session, query)
+        else:
+            matched_ids = [m.document_id for m in matches]
+            background_tasks.add_task(_log_search, session, query, matched_ids)
         
     return matches

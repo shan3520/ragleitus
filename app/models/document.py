@@ -39,4 +39,24 @@ class UnmatchedSearch(Base):
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
-__all__ = ["Document", "Chunk", "UnmatchedSearch"]
+__all__ = ["Document", "Chunk", "UnmatchedSearch", "SearchQueryLog", "DocumentRetrievalLog"]
+
+class SearchQueryLog(Base):
+    __tablename__ = "search_query_logs"
+
+    id = Column(Integer, primary_key=True)
+    query_text = Column(String(255), nullable=False, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    retrievals = relationship("DocumentRetrievalLog", back_populates="query_log", cascade="all, delete-orphan")
+
+
+class DocumentRetrievalLog(Base):
+    __tablename__ = "document_retrieval_logs"
+
+    id = Column(Integer, primary_key=True)
+    query_log_id = Column(Integer, ForeignKey("search_query_logs.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    query_log = relationship("SearchQueryLog", back_populates="retrievals")
+    document = relationship("Document")

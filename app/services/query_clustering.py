@@ -4,23 +4,33 @@ from sqlalchemy.orm import Session
 from app.models.document import UnmatchedSearch
 from app.services.jaccard_scoring import score_jaccard
 
-def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end: Optional[datetime] = None, threshold: float = 0.5) -> List[dict]:
+def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end: Optional[datetime] = None, threshold: float = 0.5, status: str = "open") -> List[dict]:
     """
     Fetches UnmatchedSearch records within a timeframe, groups them by similarity,
     extracts a canonical query for each cluster, and counts occurrences.
     """
-    query = db.query(UnmatchedSearch)
+    from app.models.query_cluster import QueryCluster
+    from sqlalchemy import or_
+
+    query = db.query(UnmatchedSearch, QueryCluster).outerjoin(
+        QueryCluster, UnmatchedSearch.id == QueryCluster.id
+    )
     
     if start:
         query = query.filter(UnmatchedSearch.timestamp >= start)
     if end:
         query = query.filter(UnmatchedSearch.timestamp <= end)
+
+    if status == "open":
+        query = query.filter(or_(QueryCluster.status == None, QueryCluster.status == "open"))
+    elif status:
+        query = query.filter(QueryCluster.status == status)
         
     records = query.all()
     
     clusters = []
     
-    for record in records:
+    for record, q_cluster in records:
         q_text = record.query_text
         found_cluster = False
         
@@ -35,9 +45,12 @@ def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end
                 
         if not found_cluster:
             clusters.append({
+                "id": record.id,
                 "canonical_query": q_text,
                 "count": 1,
-                "queries": [q_text]
+                "queries": [q_text],
+                "resolved_by_document_id": q_cluster.resolved_by_document_id if q_cluster else None,
+                "resolved_at": q_cluster.resolved_at if q_cluster else None,
             })
             
     # Optionally, pick the shortest or most frequent within cluster as canonical

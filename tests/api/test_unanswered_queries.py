@@ -25,7 +25,9 @@ def test_recent_unanswered_queries():
     db_gen = get_db()
     db = next(db_gen)
     try:
+        from app.models.query_cluster import QueryCluster
         # Clear out existing for consistent pagination testing
+        db.query(QueryCluster).delete()
         db.query(UnmatchedSearch).delete()
         
         # Insert a few searches
@@ -58,6 +60,8 @@ def test_frequent_unanswered_queries():
     db_gen = get_db()
     db = next(db_gen)
     try:
+        from app.models.query_cluster import QueryCluster
+        db.query(QueryCluster).delete()
         db.query(UnmatchedSearch).delete()
 
         # Insert multiple identical searches to test grouping
@@ -94,6 +98,8 @@ def test_clustered_unanswered_queries():
     db_gen = get_db()
     db = next(db_gen)
     try:
+        from app.models.query_cluster import QueryCluster
+        db.query(QueryCluster).delete()
         db.query(UnmatchedSearch).delete()
 
         # Insert some similar queries
@@ -103,22 +109,41 @@ def test_clustered_unanswered_queries():
         db.add(UnmatchedSearch(query_text="apple", timestamp=datetime.datetime(2023, 1, 4, 12, 0, 0)))
         db.add(UnmatchedSearch(query_text="apples", timestamp=datetime.datetime(2023, 1, 5, 12, 0, 0)))
         db.commit()
+
+        # Mark "apple" cluster as handled
+        apple_search = db.query(UnmatchedSearch).filter(UnmatchedSearch.query_text == "apple").first()
+        handled_cluster = QueryCluster(id=apple_search.id, status="handled", resolved_by_document_id=1, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
+        db.add(handled_cluster)
+        db.commit()
     finally:
         db.close()
 
+    # Default should omit handled
     resp = client.get("/api/unanswered-queries/clustered?threshold=0.3&start=2023-01-01T00:00:00&end=2023-01-06T00:00:00", headers=headers)
     assert resp.status_code == 200
     results = resp.json()
     
-    # Check that we have clustered something
     assert len(results) > 0
-    # Let's ensure the format is correct
-    assert "canonical_query" in results[0]
-    assert "volume_count" in results[0]
-    assert "timeframe" in results[0]
-    assert results[0]["timeframe"]["start"] == "2023-01-01T00:00:00"
-    assert results[0]["timeframe"]["end"] == "2023-01-06T00:00:00"
-    assert "queries" not in results[0]
+    # "apple" should not be here
+    for res in results:
+        assert res["canonical_query"] != "apple"
+        assert "canonical_query" in res
+        assert "volume_count" in res
+        assert "timeframe" in res
+        assert "id" in res
+        assert "resolved_by_document_id" in res
+        assert "resolved_at" in res
+        assert "queries" not in res
+
+    # Request with status=handled
+    resp_handled = client.get("/api/unanswered-queries/clustered?threshold=0.3&status=handled", headers=headers)
+    assert resp_handled.status_code == 200
+    handled_results = resp_handled.json()
+    
+    assert len(handled_results) == 1
+    assert handled_results[0]["canonical_query"] == "apple"
+    assert handled_results[0]["resolved_by_document_id"] == 1
+    assert handled_results[0]["resolved_at"] is not None
 
 def test_clustered_unanswered_queries_auth():
     client = TestClient(app)

@@ -44,3 +44,57 @@ def test_document_stats_endpoint():
     assert "search_analytics" in data
     assert "top_queries" in data["search_analytics"]
     assert "top_documents" in data["search_analytics"]
+
+def test_popular_searches_endpoint():
+    unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        logs = [SearchQueryLog(query_text="popular_query", timestamp=now) for _ in range(5)]
+        db.add_all(logs)
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/api/stats/popular-searches?limit=10", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) >= 1
+    assert any(d["query"] == "popular_query" and d["count"] >= 5 for d in data)
+
+def test_popular_documents_endpoint():
+    unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    doc_id = None
+    try:
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        doc = Document(title="PopDoc", status="ready")
+        db.add(doc)
+        db.commit()
+        doc_id = doc.id
+        
+        log = SearchQueryLog(query_text="pop_doc_query", timestamp=now)
+        db.add(log)
+        db.commit()
+        
+        rs = [DocumentRetrievalLog(query_log_id=log.id, document_id=doc_id) for _ in range(5)]
+        db.add_all(rs)
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/api/stats/popular-documents?limit=10", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) >= 1
+    assert any(d["document_id"] == doc_id and d["count"] >= 5 for d in data)

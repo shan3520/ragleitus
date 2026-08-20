@@ -5,9 +5,37 @@ from app.api.auth import get_current_user
 from app.db.database import get_db
 from app.services.document_service import list_user_documents
 from app.services.document_stats import compute_document_stats
-from app.services.usage_analytics import get_search_analytics
+from app.services.usage_analytics import get_search_analytics, get_popular_searches, get_popular_documents
+from pydantic import BaseModel
+from typing import List
+
+class PopularSearch(BaseModel):
+    query: str
+    count: int
+
+class PopularDocument(BaseModel):
+    document_id: int
+    count: int
 
 router = APIRouter(tags=["stats"])
+
+@router.get("/api/stats/popular-searches", response_model=List[PopularSearch])
+def api_popular_searches(
+    user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    days: int = 7,
+    limit: int = 10,
+):
+    return get_popular_searches(session, days=days, limit=limit)
+
+@router.get("/api/stats/popular-documents", response_model=List[PopularDocument])
+def api_popular_documents(
+    user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    days: int = 7,
+    limit: int = 10,
+):
+    return get_popular_documents(session, days=days, limit=limit)
 
 
 @router.get("/api/documents/stats")

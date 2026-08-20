@@ -109,13 +109,14 @@ class ClusteredQueryResponse(BaseModel):
     timeframe: Timeframe
     resolved_by_document_id: Optional[int] = None
     resolved_at: Optional[datetime] = None
+    status: str
 
 @router.get("/clustered", response_model=List[ClusteredQueryResponse])
 def get_clustered_queries(
     start: str | None = Query(None, description="Start date (ISO format)"),
     end: str | None = Query(None, description="End date (ISO format)"),
     threshold: float = Query(0.5, ge=0.0, le=1.0),
-    status: str = Query("open"),
+    status: str = Query("open,regression"),
     session: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -143,7 +144,8 @@ def get_clustered_queries(
             volume_count=c["count"],
             timeframe=timeframe,
             resolved_by_document_id=c.get("resolved_by_document_id"),
-            resolved_at=c.get("resolved_at")
+            resolved_at=c.get("resolved_at"),
+            status=c.get("status", "open")
         )
         for c in clusters
     ]

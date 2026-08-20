@@ -17,9 +17,16 @@ def test_cluster_unmatched_queries():
         db.add(UnmatchedSearch(query_text="how to reset password", timestamp=now))
         db.add(UnmatchedSearch(query_text="reset password", timestamp=now))
         db.add(UnmatchedSearch(query_text="forgot password", timestamp=now))
-        db.add(UnmatchedSearch(query_text="what is an apple", timestamp=now))
+        
+        search_apple = UnmatchedSearch(query_text="what is an apple", timestamp=now)
+        db.add(search_apple)
         db.add(UnmatchedSearch(query_text="an apple is what", timestamp=now))
         
+        db.commit()
+        
+        from app.models.query_cluster import QueryCluster
+        cluster = QueryCluster(id=search_apple.id, status="regression")
+        db.add(cluster)
         db.commit()
         
         clusters = cluster_unmatched_queries(db, threshold=0.4)
@@ -28,6 +35,11 @@ def test_cluster_unmatched_queries():
         assert "canonical_query" in clusters[0]
         assert "count" in clusters[0]
         assert "queries" in clusters[0]
+        assert "status" in clusters[0]
+        
+        statuses = [c["status"] for c in clusters]
+        assert "regression" in statuses
+        assert "open" in statuses
         
         # Verify order by count desc
         counts = [c["count"] for c in clusters]

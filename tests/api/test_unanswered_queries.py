@@ -114,17 +114,23 @@ def test_clustered_unanswered_queries():
         apple_search = db.query(UnmatchedSearch).filter(UnmatchedSearch.query_text == "apple").first()
         handled_cluster = QueryCluster(id=apple_search.id, status="handled", resolved_by_document_id=1, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
         db.add(handled_cluster)
+        
+        # Add a "regression" cluster
+        regression_search = db.query(UnmatchedSearch).filter(UnmatchedSearch.query_text == "apples").first()
+        regression_cluster = QueryCluster(id=regression_search.id, status="regression", resolved_by_document_id=1, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
+        db.add(regression_cluster)
         db.commit()
     finally:
         db.close()
 
-    # Default should omit handled
+    # Default should omit handled, but include regression
     resp = client.get("/api/unanswered-queries/clustered?threshold=0.3&start=2023-01-01T00:00:00&end=2023-01-06T00:00:00", headers=headers)
     assert resp.status_code == 200
     results = resp.json()
     
     assert len(results) > 0
     # "apple" should not be here
+    regression_found = False
     for res in results:
         assert res["canonical_query"] != "apple"
         assert "canonical_query" in res
@@ -134,6 +140,13 @@ def test_clustered_unanswered_queries():
         assert "resolved_by_document_id" in res
         assert "resolved_at" in res
         assert "queries" not in res
+        assert "status" in res
+        if res["canonical_query"] == "apples":
+            assert res["status"] == "regression"
+            regression_found = True
+        else:
+            assert res["status"] == "open"
+    assert regression_found
 
     # Request with status=handled
     resp_handled = client.get("/api/unanswered-queries/clustered?threshold=0.3&status=handled", headers=headers)

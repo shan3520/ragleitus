@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.models.document import UnmatchedSearch
 from app.services.jaccard_scoring import score_jaccard
 
-def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end: Optional[datetime] = None, threshold: float = 0.5, status: str = "open") -> List[dict]:
+def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end: Optional[datetime] = None, threshold: float = 0.5, status: str = "open,regression") -> List[dict]:
     """
     Fetches UnmatchedSearch records within a timeframe, groups them by similarity,
     extracts a canonical query for each cluster, and counts occurrences.
@@ -21,10 +21,12 @@ def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end
     if end:
         query = query.filter(UnmatchedSearch.timestamp <= end)
 
-    if status == "open":
-        query = query.filter(or_(QueryCluster.status == None, QueryCluster.status == "open"))
-    elif status:
-        query = query.filter(QueryCluster.status == status)
+    if status:
+        status_list = [s.strip() for s in status.split(",")]
+        if "open" in status_list:
+            query = query.filter(or_(QueryCluster.status == None, QueryCluster.status.in_(status_list)))
+        else:
+            query = query.filter(QueryCluster.status.in_(status_list))
         
     records = query.all()
     
@@ -55,6 +57,7 @@ def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end
                 "last_query_timestamp": record.timestamp,
                 "resolved_by_document_id": q_cluster.resolved_by_document_id if q_cluster else None,
                 "resolved_at": q_cluster.resolved_at if q_cluster else None,
+                "status": q_cluster.status if q_cluster and q_cluster.status else "open",
             })
             
     # Optionally, pick the shortest or most frequent within cluster as canonical

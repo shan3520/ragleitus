@@ -109,3 +109,29 @@ def test_group_cascade_set_null():
     
     assert doc1_after.group_id is None
     assert doc2_after.group_id is None
+
+
+def test_document_review_tracking():
+    from datetime import datetime, timezone
+    
+    engine = setup_engine()
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    now = datetime.now(timezone.utc)
+    doc = Document(
+        title="Review Tracking Doc",
+        content="Testing review fields",
+        last_reviewed_at=now,
+        review_status="approved"
+    )
+    session.add(doc)
+    session.commit()
+
+    assert doc.id is not None
+    
+    fetched_doc = session.query(Document).filter(Document.id == doc.id).one()
+    # SQLite returns naive datetime, so we must add utc tzinfo back for comparison
+    assert fetched_doc.last_reviewed_at.replace(tzinfo=timezone.utc) == now
+    assert fetched_doc.review_status == "approved"

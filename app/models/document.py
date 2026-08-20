@@ -15,6 +15,8 @@ class Document(Base):
     content = Column(Text, nullable=True)
     status = Column(String(50), nullable=False, default="pending")
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
+    last_reviewed_at = Column(DateTime, nullable=True)
+    review_status = Column(String(50), nullable=True)
 
     group = relationship("Group", back_populates="documents")
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")

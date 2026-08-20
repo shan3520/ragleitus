@@ -135,3 +135,67 @@ def test_top_negative_feedback_queries_endpoint():
     assert q1_data["count"] > q2_data["count"]
     assert idx1 < idx2
 
+def test_submit_negative_feedback_links_documents():
+    unique_user = f"submit_feedback_user_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
+        from app.models.feedback import SearchFeedback
+        from datetime import datetime, timezone
+        
+        now = datetime.now(timezone.utc)
+        
+        # Create a document
+        doc = Document(title="test doc", content="test content", status="processed")
+        db.add(doc)
+        db.commit()
+        
+        # Create a search log
+        log = SearchQueryLog(
+            query_text="query with retrieval", 
+            generated_answer="answer", 
+            timestamp=now
+        )
+        db.add(log)
+        db.commit()
+        
+        # Create a retrieval log
+        retrieval = DocumentRetrievalLog(
+            query_log_id=log.id,
+            document_id=doc.id
+        )
+        db.add(retrieval)
+        db.commit()
+        
+        log_id = log.id
+        doc_id = doc.id
+    finally:
+        db.close()
+        
+    # Submit feedback via API
+    resp = client.post(
+        "/api/feedback",
+        json={"search_log_id": log_id, "is_positive": False, "comment": "bad"},
+        headers=headers
+    )
+    
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["is_positive"] is False
+    assert data["search_log_id"] == log_id
+    assert doc_id in data["documents"]
+    
+    # Verify in DB
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.feedback import SearchFeedback
+        fb = db.query(SearchFeedback).filter_by(id=data["id"]).first()
+        assert fb is not None
+        assert len(fb.documents) == 1
+        assert fb.documents[0].id == doc_id
+    finally:
+        db.close()

@@ -2,7 +2,24 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
 from app.models.feedback import SearchFeedback
-from app.models.document import SearchQueryLog
+from app.models.document import SearchQueryLog, DocumentRetrievalLog
+
+def create_feedback(db: Session, search_log_id: int, is_positive: bool, comment: str = None) -> SearchFeedback:
+    feedback = SearchFeedback(
+        search_log_id=search_log_id,
+        is_positive=is_positive,
+        comment=comment
+    )
+    
+    retrievals = db.query(DocumentRetrievalLog).filter(DocumentRetrievalLog.query_log_id == search_log_id).all()
+    for r in retrievals:
+        if r.document:
+            feedback.documents.append(r.document)
+            
+    db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+    return feedback
 
 def get_recent_negative_feedback(db: Session, limit: int = 10):
     results = (

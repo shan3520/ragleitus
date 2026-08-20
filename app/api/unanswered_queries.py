@@ -5,6 +5,10 @@ from sqlalchemy import func, desc
 from app.db.database import get_db
 from app.models.document import UnmatchedSearch
 from app.api.auth import get_current_user
+from app.services.query_similarity import compute_query_similarity_matrix
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/unanswered-queries", tags=["analytics"])
 
@@ -55,6 +59,13 @@ def get_frequent_queries(
         .limit(limit)
         .all()
     )
+    
+    # Compute similarity matrix for the retrieved frequent queries
+    if queries:
+        query_texts = [q.query_text for q in queries]
+        matrix = compute_query_similarity_matrix(query_texts)
+        logger.info("Computed similarity matrix for %d frequent queries", len(query_texts))
+        
     return [
         {
             "query_text": q.query_text,

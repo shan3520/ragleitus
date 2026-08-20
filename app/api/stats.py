@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -7,7 +7,7 @@ from app.db.database import get_db
 from app.services.document_service import list_user_documents
 from app.services.document_stats import compute_document_stats, calculate_document_disappointment_ratio, get_unsearched_documents
 from app.services.usage_analytics import get_search_analytics, get_popular_searches, get_popular_documents
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
@@ -136,3 +136,27 @@ def api_unsearched_documents(
         }
         for doc in documents
     ]
+
+
+class DeadDocumentResponse(BaseModel):
+    id: int
+    title: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+@router.get("/dead-documents", response_model=list[DeadDocumentResponse])
+@router.get("/stats/dead-documents", response_model=list[DeadDocumentResponse])
+def api_dead_documents(days: int = 30, db: Session = Depends(get_db)):
+    """
+    Get documents that existed before the cutoff and were not retrieved in
+    any search within the last ``days`` days, newest first. Returns a plain
+    text warning when there is no search activity to compare against.
+    """
+    try:
+        documents = get_unsearched_documents(db, days)
+    except NoSearchActivityError as e:
+        return Response(content=str(e), status_code=400, media_type="text/plain")
+
+    return sorted(documents, key=lambda doc: doc.created_at, reverse=True)

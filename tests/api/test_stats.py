@@ -1,4 +1,8 @@
+import json
 import uuid
+from datetime import datetime, timedelta
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -264,3 +268,130 @@ def test_underperforming_documents_endpoint():
             cleanup_db.commit()
         finally:
             cleanup_db.close()
+
+def _wipe_documents_and_logs():
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import Document, Chunk, SearchQueryLog, DocumentRetrievalLog
+        db.query(DocumentRetrievalLog).delete()
+        db.query(SearchQueryLog).delete()
+        db.query(Chunk).delete()
+        db.query(Document).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_dead_documents_no_activity_returns_plain_text_not_json():
+    rate_limiter.reset()
+    _wipe_documents_and_logs()
+
+    client = TestClient(app)
+    resp = client.get("/stats/dead-documents?days=30")
+
+    assert resp.status_code == 400
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "No search activity" in resp.text
+    # A default FastAPI HTTPException payload would parse as JSON; the plain
+    # text warning must not.
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(resp.text)
+
+    # The un-prefixed alias on the stats router serves the same payload.
+    resp_alias = client.get("/dead-documents?days=30")
+    assert resp_alias.status_code == 400
+    assert resp_alias.headers["content-type"].startswith("text/plain")
+
+
+def test_dead_documents_sorted_newest_first():
+    rate_limiter.reset()
+    _wipe_documents_and_logs()
+
+    unique_user = f"dead_docs_user_{uuid.uuid4().hex[:8]}"
+    now = datetime.utcnow()
+
+    db_gen = get_db()
+    db = next(db_gen)
+    ids_by_title = {}
+    try:
+        from app.models.document import Document, SearchQueryLog
+        # Search activity inside the window so dead documents can be determined.
+        db.add(SearchQueryLog(query_text="dead docs probe", timestamp=now))
+        db.commit()
+
+        # Insert oldest-created document first so table insertion order is the
+        # opposite of the required response order: an unsorted pass-through of
+        # insertion/rowid order would come back oldest-first and fail below.
+        for title, age_days in (("oldest", 60), ("middle", 50), ("newest", 40)):
+            doc = Document(
+                user_id=unique_user,
+                title=title,
+                status="ready",
+                created_at=now - timedelta(days=age_days),
+            )
+            db.add(doc)
+            db.commit()
+            ids_by_title[title] = doc.id
+    finally:
+        db.close()
+
+    try:
+        client = TestClient(app)
+        resp = client.get("/stats/dead-documents?days=30")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 3
+        titles = [item["title"] for item in data]
+        assert titles == ["newest", "middle", "oldest"]
+        assert [item["id"] for item in data] == [
+            ids_by_title["newest"],
+            ids_by_title["middle"],
+            ids_by_title["oldest"],
+        ]
+    finally:
+        _wipe_documents_and_logs()
+
+
+def test_dead_documents_response_contains_only_id_title_created_at():
+    rate_limiter.reset()
+    _wipe_documents_and_logs()
+
+    unique_user = f"dead_docs_user_{uuid.uuid4().hex[:8]}"
+    now = datetime.utcnow()
+
+    db_gen = get_db()
+    db = next(db_gen)
+    dead_id = None
+    try:
+        from app.models.document import Document, SearchQueryLog
+        db.add(SearchQueryLog(query_text="dead docs fields probe", timestamp=now))
+        db.commit()
+        doc = Document(
+            user_id=unique_user,
+            title="field probe",
+            status="ready",
+            content="internal payload that must not leak",
+            created_at=now - timedelta(days=45),
+        )
+        db.add(doc)
+        db.commit()
+        dead_id = doc.id
+    finally:
+        db.close()
+
+    try:
+        client = TestClient(app)
+        resp = client.get("/stats/dead-documents?days=30")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        item = data[0]
+        # Exactly the three public fields - no leaked DB columns such as
+        # status, content, user_id or sha256.
+        assert set(item.keys()) == {"id", "title", "created_at"}
+        assert item["id"] == dead_id
+        assert item["title"] == "field probe"
+        datetime.fromisoformat(item["created_at"].replace("Z", "+00:00"))
+    finally:
+        _wipe_documents_and_logs()

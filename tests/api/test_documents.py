@@ -54,3 +54,50 @@ def test_document_extract_unauthenticated():
     client = TestClient(app)
     response = client.post("/documents/extract", files={"file": ("test.pdf", b"%PDF", "application/pdf")})
     assert response.status_code == 401
+
+
+def test_review_document_endpoint():
+    from app.services.document_service import create_document_with_chunks
+    from app.db.database import get_db
+    
+    # We need a document to review. 
+    # Create one manually in the test database.
+    client, headers = _get_authenticated_client("api_review_user")
+    
+    # Get the db session
+    db_gen = get_db()
+    session = next(db_gen)
+    
+    doc = create_document_with_chunks(
+        session=session,
+        user_id="api_review_user",
+        title="To Be Reviewed",
+        content="Content to review",
+        chunk_contents=[],
+    )
+    session.commit()
+    
+    doc_id = doc.id
+    
+    try:
+        # Call the review endpoint
+        response = client.post(f"/api/documents/{doc_id}/review", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == doc_id
+        assert data["last_reviewed_at"] is not None
+        
+        # Call it for a non-existent document
+        response_404 = client.post("/api/documents/99999/review", headers=headers)
+        assert response_404.status_code == 404
+        
+        # Call it with another user
+        other_client, other_headers = _get_authenticated_client("other_user")
+        response_other_user = other_client.post(f"/api/documents/{doc_id}/review", headers=other_headers)
+        assert response_other_user.status_code == 404
+    finally:
+        # Cleanup
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass

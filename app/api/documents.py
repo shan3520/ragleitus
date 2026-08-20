@@ -56,3 +56,11 @@ def delete_document(document_id: int, user: dict = Depends(get_current_user), se
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found")
     session.commit()
+
+
+@router.post("/api/documents/{document_id}/review")
+def review_document(document_id: int, user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
+    doc = document_service.mark_document_reviewed(session, user, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"id": doc.id, "last_reviewed_at": doc.last_reviewed_at}

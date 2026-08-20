@@ -61,3 +61,35 @@ def test_document_service_crud_flow():
 
     assert get_user_document(session, doc.id, "user1") is None
     assert delete_user_document(session, doc.id, "user1") is False
+
+
+def test_mark_document_reviewed():
+    from app.services.document_service import mark_document_reviewed
+    session = _setup_in_memory_db()
+
+    doc = create_document_with_chunks(
+        session=session,
+        user_id="review_user",
+        title="Review Document",
+        content="Full text content",
+        chunk_contents=[],
+        sha256="abc123hash",
+    )
+    session.commit()
+
+    # User dict required by the service signature
+    user_dict = {"username": "review_user"}
+
+    # Initial state
+    assert doc.last_reviewed_at is None
+
+    # Mark as reviewed
+    reviewed_doc = mark_document_reviewed(session, user_dict, doc.id)
+    assert reviewed_doc is not None
+    assert reviewed_doc.id == doc.id
+    assert reviewed_doc.last_reviewed_at is not None
+
+    # Try with wrong user
+    wrong_user_dict = {"username": "wrong_user"}
+    non_doc = mark_document_reviewed(session, wrong_user_dict, doc.id)
+    assert non_doc is None

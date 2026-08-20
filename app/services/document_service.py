@@ -5,6 +5,7 @@ Decouples API route handlers from direct SQLAlchemy ORM querying.
 """
 
 from typing import Optional, Sequence
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models.document import Document, Chunk
@@ -59,4 +60,13 @@ def create_document_with_chunks(
         session.add(chunk)
 
     session.flush()
+    return doc
+
+
+def mark_document_reviewed(db: Session, user: dict, document_id: int) -> Optional[Document]:
+    """Mark a document as reviewed by updating the last_reviewed_at timestamp."""
+    doc = get_user_document(db, document_id, user["username"])
+    if doc:
+        doc.last_reviewed_at = datetime.now(timezone.utc)
+        db.commit()
     return doc

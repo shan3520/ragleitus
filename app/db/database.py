@@ -16,6 +16,14 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Auto-create tables for SQLite / local development
 Base.metadata.create_all(bind=engine)
 
+if DATABASE_URL.startswith("sqlite"):
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE query_clusters ADD COLUMN last_resolved_query_timestamp DATETIME"))
+    except Exception:
+        pass
+
 
 def get_db():
     """FastAPI dependency that yields a scoped database session."""

@@ -159,12 +159,26 @@ def test_mark_cluster_handled_api():
     try:
         from app.models.query_cluster import QueryCluster
         from app.models.document import Document
+        from app.models.document import UnmatchedSearch
+        
+        db.query(QueryCluster).delete()
+        db.query(UnmatchedSearch).delete()
         
         doc = Document(user_id=unique_user, title="Test Doc", content="Content", status="completed")
         db.add(doc)
         db.commit()
+
+        # create a search so the cluster has an id
+        search1 = UnmatchedSearch(query_text="cluster test query", timestamp=datetime.datetime(2023, 5, 1, 10, 0, 0))
+        db.add(search1)
+        db.commit()
         
-        cluster = QueryCluster(status="open")
+        # create a similar search with a later timestamp
+        search2 = UnmatchedSearch(query_text="cluster test query", timestamp=datetime.datetime(2023, 5, 2, 10, 0, 0))
+        db.add(search2)
+        db.commit()
+
+        cluster = QueryCluster(id=search1.id, status="open")
         db.add(cluster)
         db.commit()
         
@@ -177,6 +191,9 @@ def test_mark_cluster_handled_api():
         assert data["message"] == "Cluster marked as handled"
         assert data["status"] == "handled"
         assert data["document_id"] == doc_id
+        
+        db.refresh(cluster)
+        assert cluster.last_resolved_query_timestamp == datetime.datetime(2023, 5, 2, 10, 0, 0)
         
         resp_404 = client.patch(f"/api/unanswered-queries/clusters/{cluster_id}", json={"document_id": 99999}, headers=headers)
         assert resp_404.status_code == 404

@@ -165,8 +165,14 @@ def mark_cluster(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
         
-    from app.services.query_clustering import mark_cluster_handled
-    cluster = mark_cluster_handled(session, cluster_id, payload.document_id)
+    from app.services.query_clustering import mark_cluster_handled, cluster_unmatched_queries
+    
+    # Run clustering to determine the max timestamp for this cluster
+    clusters = cluster_unmatched_queries(session, status=None)
+    target_cluster = next((c for c in clusters if c["id"] == cluster_id), None)
+    last_ts = target_cluster.get("last_query_timestamp") if target_cluster else None
+
+    cluster = mark_cluster_handled(session, cluster_id, payload.document_id, last_ts)
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
         

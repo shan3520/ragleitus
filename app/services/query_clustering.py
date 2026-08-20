@@ -40,6 +40,9 @@ def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end
             if similarity >= threshold:
                 cluster["count"] += 1
                 cluster["queries"].append(q_text)
+                if record.timestamp:
+                    if "last_query_timestamp" not in cluster or cluster["last_query_timestamp"] is None or record.timestamp > cluster["last_query_timestamp"]:
+                        cluster["last_query_timestamp"] = record.timestamp
                 found_cluster = True
                 break
                 
@@ -49,6 +52,7 @@ def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end
                 "canonical_query": q_text,
                 "count": 1,
                 "queries": [q_text],
+                "last_query_timestamp": record.timestamp,
                 "resolved_by_document_id": q_cluster.resolved_by_document_id if q_cluster else None,
                 "resolved_at": q_cluster.resolved_at if q_cluster else None,
             })
@@ -60,12 +64,14 @@ def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end
     clusters.sort(key=lambda x: x["count"], reverse=True)
     return clusters
 
-def mark_cluster_handled(db: Session, cluster_id: int, document_id: int):
+def mark_cluster_handled(db: Session, cluster_id: int, document_id: int, last_query_timestamp: Optional[datetime] = None):
     from app.models.query_cluster import QueryCluster
     cluster = db.query(QueryCluster).filter(QueryCluster.id == cluster_id).first()
     if cluster:
         cluster.status = "handled"
         cluster.resolved_by_document_id = document_id
         cluster.resolved_at = datetime.utcnow()
+        if last_query_timestamp is not None:
+            cluster.last_resolved_query_timestamp = last_query_timestamp
         db.commit()
     return cluster

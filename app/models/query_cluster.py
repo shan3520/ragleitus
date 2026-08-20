@@ -9,5 +9,6 @@ class QueryCluster(Base):
     status = Column(String(50), nullable=True)
     resolved_by_document_id = Column(Integer, ForeignKey("documents.id"), nullable=True)
     resolved_at = Column(DateTime, nullable=True)
+    last_resolved_query_timestamp = Column(DateTime, nullable=True)
 
 __all__ = ["QueryCluster"]

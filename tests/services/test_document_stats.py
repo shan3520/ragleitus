@@ -68,3 +68,20 @@ def test_none_content_treated_as_empty():
     # The default get_content accessor does ``or ""`` for None
     result = compute_document_stats([doc])
     assert result.total_content_length == 0
+
+from unittest.mock import patch
+
+@patch("app.services.document_stats.compute_staleness_score")
+def test_compute_document_stats_with_staleness(mock_score):
+    mock_score.side_effect = [10.0, 50.0]
+    docs = [
+        _FakeDoc(status="indexed", content="abc", num_chunks=1),
+        _FakeDoc(status="indexed", content="def", num_chunks=1),
+    ]
+    
+    result = compute_document_stats(docs, db="fake_db")
+    
+    assert mock_score.call_count == 2
+    assert result.total_documents == 2
+    assert result.max_staleness_score == 50.0
+    assert result.avg_staleness_score == 30.0

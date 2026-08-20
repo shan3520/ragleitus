@@ -2,8 +2,20 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.services import usage_analytics, feedback_service
 from app.models.document import DocumentRetrievalLog, SearchQueryLog
+from app.core.cache import MemoryCache
+
+_staleness_cache = MemoryCache()
+
+def invalidate_staleness_cache():
+    _staleness_cache.store.clear()
 
 def compute_staleness_score(db: Session, document) -> float:
+    doc_id = getattr(document, "id", None)
+    if doc_id is not None:
+        cached = _staleness_cache.get(f"doc_{doc_id}")
+        if cached is not None:
+            return cached
+
     score = 0.0
     
     last_reviewed = getattr(document, "last_reviewed_at", None)
@@ -42,4 +54,7 @@ def compute_staleness_score(db: Session, document) -> float:
                 )
                 score += retrieval_count * 10.0
             
-    return float(score)
+    final_score = float(score)
+    if doc_id is not None:
+        _staleness_cache.set(f"doc_{doc_id}", final_score)
+    return final_score

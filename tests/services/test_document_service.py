@@ -63,7 +63,10 @@ def test_document_service_crud_flow():
     assert delete_user_document(session, doc.id, "user1") is False
 
 
-def test_mark_document_reviewed():
+from unittest.mock import patch
+
+@patch("app.services.document_service.invalidate_staleness_cache")
+def test_mark_document_reviewed(mock_invalidate):
     from app.services.document_service import mark_document_reviewed
     session = _setup_in_memory_db()
 
@@ -88,8 +91,11 @@ def test_mark_document_reviewed():
     assert reviewed_doc is not None
     assert reviewed_doc.id == doc.id
     assert reviewed_doc.last_reviewed_at is not None
+    mock_invalidate.assert_called_once()
 
     # Try with wrong user
+    mock_invalidate.reset_mock()
     wrong_user_dict = {"username": "wrong_user"}
     non_doc = mark_document_reviewed(session, wrong_user_dict, doc.id)
     assert non_doc is None
+    mock_invalidate.assert_not_called()

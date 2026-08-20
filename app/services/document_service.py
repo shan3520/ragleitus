@@ -63,10 +63,13 @@ def create_document_with_chunks(
     return doc
 
 
+from app.services.staleness_scoring import invalidate_staleness_cache
+
 def mark_document_reviewed(db: Session, user: dict, document_id: int) -> Optional[Document]:
     """Mark a document as reviewed by updating the last_reviewed_at timestamp."""
     doc = get_user_document(db, document_id, user["username"])
     if doc:
         doc.last_reviewed_at = datetime.now(timezone.utc)
         db.commit()
+        invalidate_staleness_cache()
     return doc

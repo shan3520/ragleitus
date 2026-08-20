@@ -18,13 +18,15 @@ def _get_authenticated_client(username: str):
 
 
 def test_search_documents_endpoint():
+    from app.models.document import SearchQueryLog, DocumentRetrievalLog
+
     unique_user = f"user_search_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
     try:
-        create_document_with_chunks(
+        doc = create_document_with_chunks(
             session=db,
             user_id=unique_user,
             title="Architecture Guidelines",
@@ -32,6 +34,7 @@ def test_search_documents_endpoint():
             chunk_contents=["FastAPI app structure", "python coding conventions"],
         )
         db.commit()
+        doc_id = doc.id
     finally:
         db.close()
 
@@ -42,6 +45,19 @@ def test_search_documents_endpoint():
     assert results[0]["title"] == "Architecture Guidelines"
     assert results[0]["score"] > 0
 
+    # Verify background logging
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        last_log = db.query(SearchQueryLog).order_by(SearchQueryLog.id.desc()).first()
+        assert last_log is not None
+        assert last_log.query_text == "FastAPI"
+        
+        retrievals = db.query(DocumentRetrievalLog).filter(DocumentRetrievalLog.query_log_id == last_log.id).all()
+        assert len(retrievals) == 1
+        assert retrievals[0].document_id == doc_id
+    finally:
+        db.close()
 
 def test_search_documents_endpoint_empty():
     from app.models.document import UnmatchedSearch

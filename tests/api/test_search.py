@@ -88,3 +88,102 @@ def test_search_documents_endpoint_empty():
         assert last_unmatched.timestamp is not None
     finally:
         db.close()
+
+
+def _seed_retrieval_log(username: str):
+    rate_limiter.reset()
+    client = TestClient(app)
+    client.post("/auth/register", json={"username": username, "password": "password123"})
+    login_resp = client.post("/auth/login", json={"username": username, "password": "password123"})
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import DocumentRetrievalLog, SearchQueryLog
+
+        doc = create_document_with_chunks(
+            session=db,
+            user_id=username,
+            title="Open Tracking Doc",
+            content="Content for open tracking.",
+            chunk_contents=["open tracking chunk"],
+        )
+        query_log = SearchQueryLog(query_text="open tracking probe")
+        db.add(query_log)
+        db.commit()
+        retrieval_log = DocumentRetrievalLog(query_log_id=query_log.id, document_id=doc.id)
+        db.add(retrieval_log)
+        db.commit()
+        return client, headers, query_log.id, doc.id
+    finally:
+        db.close()
+
+
+def test_log_document_open_records_timestamp():
+    from app.models.document import DocumentRetrievalLog
+
+    unique_user = f"user_open_{uuid.uuid4().hex[:8]}"
+    client, headers, search_id, document_id = _seed_retrieval_log(unique_user)
+
+    resp = client.post(
+        f"/api/documents/search/{search_id}/documents/{document_id}/open",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+    # Re-read through a fresh session so a 200 without persistence fails.
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        row = (
+            db.query(DocumentRetrievalLog)
+            .filter(
+                DocumentRetrievalLog.query_log_id == search_id,
+                DocumentRetrievalLog.document_id == document_id,
+            )
+            .first()
+        )
+        assert row is not None
+        assert row.opened_at is not None
+    finally:
+        db.close()
+
+
+def test_log_document_open_missing_log_returns_404_without_creating():
+    from app.models.document import DocumentRetrievalLog
+
+    unique_user = f"user_open_missing_{uuid.uuid4().hex[:8]}"
+    client, headers, _, _ = _seed_retrieval_log(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        count_before = db.query(DocumentRetrievalLog).count()
+    finally:
+        db.close()
+
+    resp = client.post(
+        "/api/documents/search/999999999/documents/999999999/open",
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        count_after = db.query(DocumentRetrievalLog).count()
+        assert count_after == count_before
+        assert (
+            db.query(DocumentRetrievalLog)
+            .filter(
+                DocumentRetrievalLog.query_log_id == 999999999,
+                DocumentRetrievalLog.document_id == 999999999,
+            )
+            .first()
+            is None
+        )
+    finally:
+        db.close()

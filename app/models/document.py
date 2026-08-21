@@ -62,6 +62,7 @@ class DocumentRetrievalLog(Base):
     id = Column(Integer, primary_key=True)
     query_log_id = Column(Integer, ForeignKey("search_query_logs.id", ondelete="CASCADE"), nullable=False, index=True)
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    opened_at = Column(DateTime(timezone=True), nullable=True)
 
     query_log = relationship("SearchQueryLog", back_populates="retrievals")
     document = relationship("Document")

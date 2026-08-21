@@ -52,6 +52,8 @@ def test_search_documents_endpoint():
         last_log = db.query(SearchQueryLog).order_by(SearchQueryLog.id.desc()).first()
         assert last_log is not None
         assert last_log.query_text == "FastAPI"
+        assert last_log.duration_ms is not None
+        assert last_log.duration_ms >= 0
         
         retrievals = db.query(DocumentRetrievalLog).filter(DocumentRetrievalLog.query_log_id == last_log.id).all()
         assert len(retrievals) == 1
@@ -85,6 +87,7 @@ def test_search_documents_endpoint_empty():
 
         last_unmatched = db.query(UnmatchedSearch).order_by(UnmatchedSearch.id.desc()).first()
         assert last_unmatched.query_text == "NonExistentTerm"
+        assert last_unmatched.duration_ms is not None
         assert last_unmatched.timestamp is not None
     finally:
         db.close()

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, ForeignKey, Text, DateTime
+from sqlalchemy import Column, Float, Integer, String, ForeignKey, Text, DateTime
 from sqlalchemy.orm import relationship
 
 from .evaluation import Base
@@ -40,6 +40,7 @@ class UnmatchedSearch(Base):
 
     id = Column(Integer, primary_key=True)
     query_text = Column(String(255), nullable=False)
+    duration_ms = Column(Float, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
@@ -51,6 +52,7 @@ class SearchQueryLog(Base):
     id = Column(Integer, primary_key=True)
     query_text = Column(String(255), nullable=False, index=True)
     generated_answer = Column(Text, nullable=True)
+    duration_ms = Column(Float, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     retrievals = relationship("DocumentRetrievalLog", back_populates="query_log", cascade="all, delete-orphan")

@@ -28,6 +28,16 @@ if DATABASE_URL.startswith("sqlite"):
             conn.execute(text("ALTER TABLE documents ADD COLUMN created_at DATETIME"))
     except Exception:
         pass
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE search_query_logs ADD COLUMN duration_ms FLOAT"))
+    except Exception:
+        pass
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE unmatched_searches ADD COLUMN duration_ms FLOAT"))
+    except Exception:
+        pass
 
 
 def get_db():

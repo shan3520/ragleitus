@@ -8,6 +8,7 @@ extraction for pre-vector keyword matching and fallback search.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Sequence
 
 
@@ -61,18 +62,18 @@ from datetime import datetime, timezone
 from app.models.document import UnmatchedSearch, SearchQueryLog, DocumentRetrievalLog
 
 
-def _log_unmatched_search(session: Session, query: str) -> None:
+def _log_unmatched_search(session: Session, query: str, duration_ms: float | None = None) -> None:
     try:
-        unmatched = UnmatchedSearch(query_text=query, timestamp=datetime.now(timezone.utc))
+        unmatched = UnmatchedSearch(query_text=query, duration_ms=duration_ms, timestamp=datetime.now(timezone.utc))
         session.add(unmatched)
         session.commit()
     except Exception:
         pass
 
 
-def _log_search(session: Session, query: str, matched_doc_ids: list[int]) -> None:
+def _log_search(session: Session, query: str, matched_doc_ids: list[int], duration_ms: float | None = None) -> None:
     try:
-        query_log = SearchQueryLog(query_text=query, timestamp=datetime.now(timezone.utc))
+        query_log = SearchQueryLog(query_text=query, duration_ms=duration_ms, timestamp=datetime.now(timezone.utc))
         session.add(query_log)
         session.flush()
         
@@ -115,6 +116,8 @@ def search_documents(
     list[SearchMatch]
         Matches sorted by score in descending order.
     """
+    start_time = time.perf_counter()
+
     if not query.strip():
         return []
 
@@ -148,10 +151,11 @@ def search_documents(
     matches.sort(key=lambda m: m.score, reverse=True)
     
     if background_tasks and session:
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
         if not matches:
-            background_tasks.add_task(_log_unmatched_search, session, query)
+            background_tasks.add_task(_log_unmatched_search, session, query, duration_ms=duration_ms)
         else:
             matched_ids = [m.document_id for m in matches]
-            background_tasks.add_task(_log_search, session, query, matched_ids)
+            background_tasks.add_task(_log_search, session, query, matched_ids, duration_ms=duration_ms)
         
     return matches

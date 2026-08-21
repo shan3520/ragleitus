@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
 from app.services.usage_analytics import get_search_analytics, get_popular_searches, get_popular_documents
+from app.core.errors import NoSearchActivityError
 from app.db.database import Base
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -18,8 +19,87 @@ def db_session():
     Base.metadata.drop_all(bind=engine)
 
 def test_get_search_analytics_empty(db_session):
-    result = get_search_analytics(db_session)
-    assert result == {"top_queries": [], "top_documents": []}
+    # An empty activity window is an error state, not an empty result.
+    with pytest.raises(NoSearchActivityError):
+        get_search_analytics(db_session)
+
+def test_get_search_analytics_raises_when_only_old_activity(db_session):
+    # Activity exists in the table but none inside the requested window:
+    # the zero-count check must be window-scoped, so this still raises
+    # instead of returning {"top_queries": [], "top_documents": []}.
+    now = datetime.now(timezone.utc)
+    db_session.add(SearchQueryLog(query_text="ancient", timestamp=now - timedelta(days=60)))
+    db_session.commit()
+
+    with pytest.raises(NoSearchActivityError):
+        get_search_analytics(db_session, days=30)
+
+def test_get_search_analytics_excludes_logs_outside_window(db_session):
+    now = datetime.now(timezone.utc)
+
+    doc_recent = Document(title="RecentDoc", status="ready")
+    doc_ancient = Document(title="AncientDoc", status="ready")
+    db_session.add_all([doc_recent, doc_ancient])
+    db_session.commit()
+
+    recent_log = SearchQueryLog(query_text="recent query", timestamp=now)
+    ancient_log = SearchQueryLog(query_text="ancient query", timestamp=now - timedelta(days=45))
+    db_session.add_all([recent_log, ancient_log])
+    db_session.commit()
+
+    db_session.add_all([
+        DocumentRetrievalLog(query_log_id=recent_log.id, document_id=doc_recent.id),
+        DocumentRetrievalLog(query_log_id=ancient_log.id, document_id=doc_ancient.id),
+    ])
+    db_session.commit()
+
+    result = get_search_analytics(db_session, days=30)
+
+    # If the pre-aggregation window filter were dropped, the 45-day-old
+    # query and its document would appear here.
+    assert result["top_queries"] == [{"query": "recent query", "count": 1}]
+    assert result["top_documents"] == [{"document_id": doc_recent.id, "count": 1}]
+
+def test_get_popular_searches_excludes_logs_outside_window(db_session):
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        SearchQueryLog(query_text="recent query", timestamp=now),
+        SearchQueryLog(query_text="ancient query", timestamp=now - timedelta(days=45)),
+    ])
+    db_session.commit()
+
+    result = get_popular_searches(db_session, days=30)
+    assert result == [{"query": "recent query", "count": 1}]
+
+def test_get_popular_documents_excludes_logs_outside_window(db_session):
+    now = datetime.now(timezone.utc)
+
+    doc_recent = Document(title="RecentDoc", status="ready")
+    doc_ancient = Document(title="AncientDoc", status="ready")
+    db_session.add_all([doc_recent, doc_ancient])
+    db_session.commit()
+
+    recent_log = SearchQueryLog(query_text="recent query", timestamp=now)
+    ancient_log = SearchQueryLog(query_text="ancient query", timestamp=now - timedelta(days=45))
+    db_session.add_all([recent_log, ancient_log])
+    db_session.commit()
+
+    db_session.add_all([
+        DocumentRetrievalLog(query_log_id=recent_log.id, document_id=doc_recent.id),
+        DocumentRetrievalLog(query_log_id=ancient_log.id, document_id=doc_ancient.id),
+    ])
+    db_session.commit()
+
+    result = get_popular_documents(db_session, days=30)
+    assert result == [{"document_id": doc_recent.id, "count": 1}]
+
+def test_get_popular_searches_raises_on_empty_window(db_session):
+    with pytest.raises(NoSearchActivityError):
+        get_popular_searches(db_session, days=30)
+
+def test_get_popular_documents_raises_on_empty_window(db_session):
+    with pytest.raises(NoSearchActivityError):
+        get_popular_documents(db_session, days=30)
 
 def test_get_search_analytics_with_data(db_session):
     now = datetime.now(timezone.utc)

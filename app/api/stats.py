@@ -6,7 +6,7 @@ from app.core.errors import NoSearchActivityError
 from app.db.database import get_db
 from app.services.document_service import list_user_documents
 from app.services.document_stats import compute_document_stats, calculate_document_disappointment_ratio, get_unsearched_documents, get_underperforming_document_ids
-from app.services.usage_analytics import get_search_analytics, get_popular_searches, get_popular_documents
+from app.services.usage_analytics import get_search_analytics_or_empty, get_popular_searches, get_popular_documents
 from pydantic import BaseModel, ConfigDict
 from typing import List
 from datetime import datetime, timedelta, timezone
@@ -27,7 +27,7 @@ router = APIRouter(tags=["stats"])
 def api_popular_searches(
     user: dict = Depends(get_current_user),
     session: Session = Depends(get_db),
-    days: int = 7,
+    days: int = 30,
     limit: int = 10,
 ):
     return get_popular_searches(session, days=days, limit=limit)
@@ -36,7 +36,7 @@ def api_popular_searches(
 def api_popular_documents(
     user: dict = Depends(get_current_user),
     session: Session = Depends(get_db),
-    days: int = 7,
+    days: int = 30,
     limit: int = 10,
 ):
     return get_popular_documents(session, days=days, limit=limit)
@@ -53,7 +53,7 @@ def get_collection_stats(
     """
     documents = list_user_documents(session, user["username"])
     stats = compute_document_stats(documents)
-    search_analytics = get_search_analytics(session, days=days)
+    search_analytics = get_search_analytics_or_empty(session, days=days)
     return {
         "total_documents": stats.total_documents,
         "total_chunks": stats.total_chunks,

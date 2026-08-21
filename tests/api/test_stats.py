@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.errors import NoSearchActivityError
 from app.core.middleware import rate_limiter
 from app.db.database import get_db
 from app.services.document_service import create_document_with_chunks
@@ -167,6 +168,132 @@ def test_popular_documents_endpoint():
             cleanup_db.commit()
         finally:
             cleanup_db.close()
+
+def test_popular_searches_honors_days_and_raises_on_empty_window():
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog
+        db.query(SearchQueryLog).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    # With zero search logs, the request must surface NoSearchActivityError
+    # rather than quietly returning 200 OK with an empty list.
+    with pytest.raises(NoSearchActivityError):
+        client.get("/api/stats/popular-searches?days=30", headers=headers)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        logs = (
+            [SearchQueryLog(query_text="fresh_query", timestamp=now) for _ in range(2)]
+            + [SearchQueryLog(query_text="stale_query", timestamp=now - timedelta(days=20))]
+        )
+        db.add_all(logs)
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        # days=7 must exclude the 20-day-old query. If the backend ignored
+        # the ?days parameter (defaulting to 30 or not filtering at all),
+        # stale_query would appear here and fail the assertion.
+        resp = client.get("/api/stats/popular-searches?days=7&limit=1000", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [d["query"] for d in data] == ["fresh_query"]
+        assert data[0]["count"] == 2
+    finally:
+        db_gen = get_db()
+        cleanup_db = next(db_gen)
+        try:
+            from app.models.document import SearchQueryLog
+            cleanup_db.query(SearchQueryLog).delete()
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()
+
+def test_popular_documents_honors_days_and_raises_on_empty_window():
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document, Chunk
+        db.query(DocumentRetrievalLog).delete()
+        db.query(SearchQueryLog).delete()
+        db.query(Chunk).delete()
+        db.query(Document).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    # Zero activity in the requested window: error state, not an empty 200.
+    with pytest.raises(NoSearchActivityError):
+        client.get("/api/stats/popular-documents?days=30", headers=headers)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    fresh_doc_id, stale_doc_id = None, None
+    try:
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        doc_fresh = Document(title="FreshDoc", status="ready")
+        doc_stale = Document(title="StaleDoc", status="ready")
+        db.add_all([doc_fresh, doc_stale])
+        db.commit()
+        fresh_doc_id, stale_doc_id = doc_fresh.id, doc_stale.id
+
+        fresh_log = SearchQueryLog(query_text="fresh_doc_query", timestamp=now)
+        stale_log = SearchQueryLog(query_text="stale_doc_query", timestamp=now - timedelta(days=20))
+        db.add_all([fresh_log, stale_log])
+        db.commit()
+
+        rs = [
+            DocumentRetrievalLog(query_log_id=fresh_log.id, document_id=fresh_doc_id)
+            for _ in range(3)
+        ] + [
+            DocumentRetrievalLog(query_log_id=stale_log.id, document_id=stale_doc_id)
+            for _ in range(2)
+        ]
+        db.add_all(rs)
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        # days=7 must exclude retrievals driven by the 20-day-old query. If
+        # ?days were ignored (30-day default or no filter), StaleDoc would
+        # appear here and fail the assertion.
+        resp = client.get("/api/stats/popular-documents?days=7&limit=1000", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [d["document_id"] for d in data] == [fresh_doc_id]
+        assert data[0]["count"] == 3
+        assert stale_doc_id not in {d["document_id"] for d in data}
+    finally:
+        db_gen = get_db()
+        cleanup_db = next(db_gen)
+        try:
+            from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document, Chunk
+            cleanup_db.query(DocumentRetrievalLog).delete()
+            cleanup_db.query(SearchQueryLog).delete()
+            cleanup_db.query(Chunk).delete()
+            cleanup_db.query(Document).delete()
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()
+
 
 def test_underperforming_documents_endpoint():
     db_gen = get_db()

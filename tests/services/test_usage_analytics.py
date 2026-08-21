@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, timedelta, timezone
 from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
-from app.services.usage_analytics import get_search_analytics, get_popular_searches, get_popular_documents
+from app.services.usage_analytics import get_search_analytics, get_popular_searches, get_popular_documents, get_daily_search_latency
 from app.core.errors import NoSearchActivityError
 from app.db.database import Base
 from sqlalchemy import create_engine
@@ -208,3 +208,67 @@ def test_get_popular_documents(db_session):
     assert len(result) == 2
     assert result[0] == {"document_id": doc1.id, "count": 3}
     assert result[1] == {"document_id": doc2.id, "count": 2}
+
+def test_get_daily_search_latency_excludes_logs_outside_window(db_session):
+    now = datetime.now(timezone.utc)
+
+    db_session.add_all([
+        SearchQueryLog(query_text="recent a", timestamp=now, duration_ms=100.0),
+        SearchQueryLog(query_text="recent b", timestamp=now, duration_ms=300.0),
+        SearchQueryLog(query_text="ancient", timestamp=now - timedelta(days=45), duration_ms=9000.0),
+    ])
+    db_session.commit()
+
+    result = get_daily_search_latency(db_session, days=30)
+
+    # The 45-day-old log sits outside the 30-day window. If the window
+    # filter were dropped it would join today's group and inflate every
+    # aggregate here: total 3 instead of 2, average ~3133 instead of 200,
+    # max 9000 instead of 300.
+    assert len(result) == 1
+    assert result[0]["total_searches"] == 2
+    assert result[0]["average_duration_ms"] == 200.0
+    assert result[0]["max_duration_ms"] == 300.0
+
+def test_get_daily_search_latency_groups_by_date(db_session):
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(days=1)
+
+    db_session.add_all([
+        SearchQueryLog(query_text="today 1", timestamp=now, duration_ms=50.0),
+        SearchQueryLog(query_text="today 2", timestamp=now, duration_ms=150.0),
+        SearchQueryLog(query_text="yesterday", timestamp=yesterday, duration_ms=400.0),
+    ])
+    db_session.commit()
+
+    result = get_daily_search_latency(db_session, days=7)
+
+    assert [row["date"] for row in result] == [
+        yesterday.date().isoformat(),
+        now.date().isoformat(),
+    ]
+    assert result[0] == {
+        "date": yesterday.date().isoformat(),
+        "total_searches": 1,
+        "average_duration_ms": 400.0,
+        "max_duration_ms": 400.0,
+    }
+    assert result[1]["total_searches"] == 2
+    assert result[1]["average_duration_ms"] == 100.0
+    assert result[1]["max_duration_ms"] == 150.0
+
+def test_get_daily_search_latency_defaults_null_durations_to_zero(db_session):
+    now = datetime.now(timezone.utc)
+
+    db_session.add(SearchQueryLog(query_text="no timing", timestamp=now, duration_ms=None))
+    db_session.commit()
+
+    result = get_daily_search_latency(db_session, days=30)
+
+    assert len(result) == 1
+    assert result[0]["total_searches"] == 1
+    assert result[0]["average_duration_ms"] == 0.0
+    assert result[0]["max_duration_ms"] == 0.0
+
+def test_get_daily_search_latency_empty_returns_empty_list(db_session):
+    assert get_daily_search_latency(db_session, days=30) == []

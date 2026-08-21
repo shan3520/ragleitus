@@ -79,6 +79,32 @@ def get_popular_searches(db: Session, days: int = 30, limit: int = 10) -> list[d
     
     return [{"query": row[0], "count": row[1]} for row in query_counts]
 
+def get_daily_search_latency(db: Session, days: int = 30) -> list[dict]:
+    start_time = datetime.now(timezone.utc) - timedelta(days=days)
+
+    rows = db.query(
+        func.date(SearchQueryLog.timestamp).label('date'),
+        func.count(SearchQueryLog.id).label('total_searches'),
+        func.avg(SearchQueryLog.duration_ms).label('average_duration_ms'),
+        func.max(SearchQueryLog.duration_ms).label('max_duration_ms'),
+    ).filter(
+        SearchQueryLog.timestamp >= start_time
+    ).group_by(
+        func.date(SearchQueryLog.timestamp)
+    ).order_by(
+        func.date(SearchQueryLog.timestamp)
+    ).all()
+
+    return [
+        {
+            "date": row.date,
+            "total_searches": row.total_searches,
+            "average_duration_ms": float(row.average_duration_ms) if row.average_duration_ms is not None else 0.0,
+            "max_duration_ms": float(row.max_duration_ms) if row.max_duration_ms is not None else 0.0,
+        }
+        for row in rows
+    ]
+
 def get_popular_documents(db: Session, days: int = 30, limit: int = 10) -> list[dict]:
     start_time = datetime.now(timezone.utc) - timedelta(days=days)
 

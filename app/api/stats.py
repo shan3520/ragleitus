@@ -6,10 +6,10 @@ from app.core.errors import NoSearchActivityError
 from app.db.database import get_db
 from app.services.document_service import list_user_documents
 from app.services.document_stats import compute_document_stats, calculate_document_disappointment_ratio, get_unsearched_documents, get_underperforming_document_ids
-from app.services.usage_analytics import get_search_analytics_or_empty, get_popular_searches, get_popular_documents
+from app.services.usage_analytics import get_search_analytics_or_empty, get_popular_searches, get_popular_documents, get_daily_search_latency
 from pydantic import BaseModel, ConfigDict
 from typing import List
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func
 from app.models.document import DocumentRetrievalLog, SearchQueryLog
 
@@ -20,6 +20,12 @@ class PopularSearch(BaseModel):
 class PopularDocument(BaseModel):
     document_id: int
     count: int
+
+class DailySearchLatency(BaseModel):
+    date: date
+    total_searches: int
+    average_duration_ms: float
+    max_duration_ms: float
 
 router = APIRouter(tags=["stats"])
 
@@ -40,6 +46,13 @@ def api_popular_documents(
     limit: int = 10,
 ):
     return get_popular_documents(session, days=days, limit=limit)
+
+@router.get("/api/stats/search-latency", response_model=list[DailySearchLatency])
+def api_daily_search_latency(
+    session: Session = Depends(get_db),
+    days: int = 30,
+):
+    return get_daily_search_latency(session, days)
 
 
 @router.get("/api/documents/stats")

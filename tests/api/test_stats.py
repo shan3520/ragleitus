@@ -478,6 +478,56 @@ def test_underperforming_documents_excludes_zero_returns_and_honors_min_shown():
             cleanup_db.close()
 
 
+def test_search_latency_endpoint_honors_days():
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog
+        db.query(SearchQueryLog).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.document import SearchQueryLog
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        logs = (
+            [SearchQueryLog(query_text="fresh", timestamp=now, duration_ms=100.0) for _ in range(2)]
+            + [SearchQueryLog(query_text="stale", timestamp=now - timedelta(days=20), duration_ms=5000.0)]
+        )
+        db.add_all(logs)
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        # days=7 must exclude the 20-day-old search. If ?days were ignored
+        # (30-day default or no filter at all), its 5000ms duration would
+        # join today's group and fail every assertion below.
+        resp = client.get("/api/stats/search-latency?days=7", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["total_searches"] == 2
+        assert data[0]["average_duration_ms"] == 100.0
+        assert data[0]["max_duration_ms"] == 100.0
+    finally:
+        db_gen = get_db()
+        cleanup_db = next(db_gen)
+        try:
+            from app.models.document import SearchQueryLog
+            cleanup_db.query(SearchQueryLog).delete()
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()
+
+
 def _wipe_documents_and_logs():
     db_gen = get_db()
     db = next(db_gen)

@@ -5,7 +5,7 @@ from app.api.auth import get_current_user
 from app.core.errors import NoSearchActivityError
 from app.db.database import get_db
 from app.services.document_service import list_user_documents
-from app.services.document_stats import compute_document_stats, calculate_document_disappointment_ratio, get_unsearched_documents
+from app.services.document_stats import compute_document_stats, calculate_document_disappointment_ratio, get_unsearched_documents, get_underperforming_document_ids
 from app.services.usage_analytics import get_search_analytics, get_popular_searches, get_popular_documents
 from pydantic import BaseModel, ConfigDict
 from typing import List
@@ -74,30 +74,21 @@ def api_underperforming_documents(
     session: Session = Depends(get_db),
     min_retrievals: int = 5,
     days: int = 30,
+    min_shown: int | None = None,
 ):
     documents = list_user_documents(session, user["username"])
     if not documents:
         return []
 
-    start_time = datetime.now(timezone.utc) - timedelta(days=days)
     doc_ids = [doc.id for doc in documents]
-    
-    doc_counts = session.query(
-        DocumentRetrievalLog.document_id,
-        func.count(DocumentRetrievalLog.id).label('count')
-    ).join(
-        SearchQueryLog, DocumentRetrievalLog.query_log_id == SearchQueryLog.id
-    ).filter(
-        SearchQueryLog.timestamp >= start_time,
-        DocumentRetrievalLog.document_id.in_(doc_ids)
-    ).group_by(
-        DocumentRetrievalLog.document_id
-    ).having(
-        func.count(DocumentRetrievalLog.id) >= min_retrievals
-    ).all()
-    
-    valid_doc_ids = {row[0] for row in doc_counts}
-    
+    valid_doc_ids = get_underperforming_document_ids(
+        session,
+        doc_ids,
+        days=days,
+        min_retrievals=min_retrievals,
+        min_shown=min_shown,
+    )
+
     result = []
     for doc in documents:
         if doc.id in valid_doc_ids:
@@ -107,7 +98,7 @@ def api_underperforming_documents(
                 title=doc.title,
                 disappointment_ratio=ratio
             ))
-            
+
     result.sort(key=lambda x: x.disappointment_ratio, reverse=True)
     return result
 

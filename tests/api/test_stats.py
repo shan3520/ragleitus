@@ -269,6 +269,88 @@ def test_underperforming_documents_endpoint():
         finally:
             cleanup_db.close()
 
+def test_underperforming_documents_excludes_zero_returns_and_honors_min_shown():
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.feedback import SearchFeedback, document_feedback
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document, Chunk
+        db.execute(document_feedback.delete())
+        db.query(SearchFeedback).delete()
+        db.query(DocumentRetrievalLog).delete()
+        db.query(SearchQueryLog).delete()
+        db.query(Chunk).delete()
+        db.query(Document).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+
+    doc_zero_id, doc_mid_id, doc_high_id = None, None, None
+    try:
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+
+        doc_zero = Document(title="Zero returns", status="ready", user_id=unique_user)
+        doc_mid = Document(title="Mid traffic", status="ready", user_id=unique_user)
+        doc_high = Document(title="High traffic", status="ready", user_id=unique_user)
+        db.add_all([doc_zero, doc_mid, doc_high])
+        db.commit()
+        doc_zero_id, doc_mid_id, doc_high_id = doc_zero.id, doc_mid.id, doc_high.id
+
+        log = SearchQueryLog(query_text="min_shown probe", timestamp=now)
+        db.add(log)
+        db.commit()
+
+        # doc_mid: 6 retrievals (clears default min_retrievals=5 but not 8)
+        # doc_high: 9 retrievals; doc_zero: never retrieved at all.
+        rs = [DocumentRetrievalLog(query_log_id=log.id, document_id=doc_mid_id) for _ in range(6)]
+        rs += [DocumentRetrievalLog(query_log_id=log.id, document_id=doc_high_id) for _ in range(9)]
+        db.add_all(rs)
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        # min_shown=8: only the 9-retrieval document clears the bar. The
+        # 6-retrieval document passes the default min_retrievals floor, so if
+        # the endpoint ignored min_shown it would wrongly appear here.
+        resp = client.get("/api/stats/underperforming-documents?min_shown=8", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [item["document_id"] for item in data] == [doc_high_id]
+
+        # Without min_shown the 6-retrieval document qualifies again.
+        resp_default = client.get("/api/stats/underperforming-documents", headers=headers)
+        assert resp_default.status_code == 200
+        default_ids = {item["document_id"] for item in resp_default.json()}
+        assert default_ids == {doc_mid_id, doc_high_id}
+
+        # The zero-return document is never returned under any threshold.
+        assert doc_zero_id not in default_ids
+    finally:
+        db_gen = get_db()
+        cleanup_db = next(db_gen)
+        try:
+            from app.models.feedback import SearchFeedback, document_feedback
+            from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document, Chunk
+            cleanup_db.execute(document_feedback.delete())
+            cleanup_db.query(SearchFeedback).delete()
+            cleanup_db.query(DocumentRetrievalLog).delete()
+            cleanup_db.query(SearchQueryLog).delete()
+            cleanup_db.query(Chunk).delete()
+            cleanup_db.query(Document).delete()
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()
+
+
 def _wipe_documents_and_logs():
     db_gen = get_db()
     db = next(db_gen)

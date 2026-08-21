@@ -8,7 +8,7 @@ instances so the caller (API layer) is responsible for session management.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from sqlalchemy import func
@@ -109,6 +109,43 @@ def get_unsearched_documents(session, days: int):
         .order_by(Document.created_at.desc())
         .all()
     )
+
+
+def get_underperforming_document_ids(
+    session,
+    doc_ids: Sequence[int],
+    days: int = 30,
+    min_retrievals: int = 5,
+    min_shown: int | None = None,
+) -> set[int]:
+    """
+    Return the ids of ``doc_ids`` whose retrieval count within the last
+    ``days`` days qualifies them as underperforming candidates.
+
+    Documents with zero search returns in the window are strictly excluded:
+    they have never been surfaced to a user, so there is no performance
+    signal to judge them by. When ``min_shown`` is provided it acts as an
+    additional floor on top of ``min_retrievals``.
+    """
+    start_time = datetime.now(timezone.utc) - timedelta(days=days)
+    retrieval_count = func.count(DocumentRetrievalLog.id)
+
+    query = (
+        session.query(DocumentRetrievalLog.document_id)
+        .join(SearchQueryLog, DocumentRetrievalLog.query_log_id == SearchQueryLog.id)
+        .filter(
+            SearchQueryLog.timestamp >= start_time,
+            DocumentRetrievalLog.document_id.in_(list(doc_ids)),
+        )
+        .group_by(DocumentRetrievalLog.document_id)
+        # Strict exclusion of documents with exactly 0 search returns.
+        .having(retrieval_count > 0)
+        .having(retrieval_count >= min_retrievals)
+    )
+    if min_shown is not None:
+        query = query.having(retrieval_count >= min_shown)
+
+    return {row[0] for row in query.all()}
 
 
 def compute_document_stats(

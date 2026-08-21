@@ -134,7 +134,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.errors import NoSearchActivityError
 from app.models import Base
 from app.models.document import Document, DocumentRetrievalLog, SearchQueryLog
-from app.services.document_stats import get_unsearched_documents
+from app.services.document_stats import get_unsearched_documents, get_underperforming_document_ids
 
 
 @pytest.fixture()
@@ -274,3 +274,62 @@ def test_window_with_zero_search_logs_raises_error(db_session):
 
     with pytest.raises(NoSearchActivityError):
         get_unsearched_documents(db_session, days=7)
+
+
+def _add_document(session, title):
+    doc = Document(title=title, status="ready")
+    session.add(doc)
+    session.commit()
+    return doc
+
+
+def _add_retrievals(session, log, doc, count):
+    session.add_all(
+        DocumentRetrievalLog(query_log_id=log.id, document_id=doc.id)
+        for _ in range(count)
+    )
+    session.commit()
+
+
+def test_underperforming_ids_exclude_zero_return_documents(db_session):
+    """A document with zero search returns must never be reported as an
+    underperforming candidate, even when a sibling document qualifies."""
+    now = datetime.utcnow()
+    shown = _add_document(db_session, "shown doc")
+    never_shown = _add_document(db_session, "never shown doc")
+
+    log = _add_search_log(db_session, "window query", now)
+    _add_retrievals(db_session, log, shown, 5)
+
+    result = get_underperforming_document_ids(
+        db_session, [shown.id, never_shown.id], days=30
+    )
+
+    assert shown.id in result
+    assert never_shown.id not in result
+
+
+def test_underperforming_ids_respect_min_shown_threshold(db_session):
+    """When ``min_shown`` is provided, documents whose retrieval count is
+    below it must be excluded even though they clear the default floor."""
+    now = datetime.utcnow()
+    low = _add_document(db_session, "low traffic doc")
+    high = _add_document(db_session, "high traffic doc")
+
+    log = _add_search_log(db_session, "traffic query", now)
+    _add_retrievals(db_session, log, low, 6)
+    _add_retrievals(db_session, log, high, 9)
+
+    result = get_underperforming_document_ids(
+        db_session, [low.id, high.id], days=30, min_shown=8
+    )
+
+    assert high.id in result
+    assert low.id not in result
+
+    # Without min_shown the low-traffic document still clears the default
+    # min_retrievals floor, proving the parameter actually narrows results.
+    baseline = get_underperforming_document_ids(
+        db_session, [low.id, high.id], days=30
+    )
+    assert baseline == {low.id, high.id}

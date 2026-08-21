@@ -1,5 +1,6 @@
 import uuid
 import datetime
+from datetime import timedelta, timezone
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -77,18 +78,100 @@ def test_frequent_unanswered_queries():
 
     resp = client.get("/api/unanswered-queries/frequent?limit=10", headers=headers)
     assert resp.status_code == 200
-    results = resp.json()
-    
+    payload = resp.json()
+
+    # Response is an envelope object with data and message, not a bare list
+    assert isinstance(payload, dict)
+    assert set(payload.keys()) == {"data", "message"}
+    assert isinstance(payload["message"], str)
+
+    results = payload["data"]
+
     assert len(results) == 3
     # Ordered by count descending
     assert results[0]["query_text"] == "banana"
     assert results[0]["count"] == 5
-    
+
     assert results[1]["query_text"] == "apple"
     assert results[1]["count"] == 3
-    
+
     assert results[2]["query_text"] == "cherry"
     assert results[2]["count"] == 1
+
+    # Individual item schema is unchanged
+    for item in results:
+        assert set(item.keys()) == {"query_text", "count"}
+
+
+def test_frequent_unanswered_queries_filters_old_searches():
+    unique_user = f"user_frequent_window_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    now = datetime.datetime.now(timezone.utc)
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.query_cluster import QueryCluster
+        db.query(QueryCluster).delete()
+        db.query(UnmatchedSearch).delete()
+
+        # 'legacy query' lives entirely outside the window
+        for _ in range(4):
+            db.add(UnmatchedSearch(query_text="legacy query", timestamp=now - timedelta(days=60)))
+
+        # 'fresh query' has one OLD occurrence alongside two recent ones:
+        # aggregating before filtering would wrongly count it as 3
+        db.add(UnmatchedSearch(query_text="fresh query", timestamp=now - timedelta(days=60)))
+        db.add(UnmatchedSearch(query_text="fresh query", timestamp=now - timedelta(hours=1)))
+        db.add(UnmatchedSearch(query_text="fresh query", timestamp=now - timedelta(hours=2)))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/api/unanswered-queries/frequent?days=30&limit=10", headers=headers)
+    assert resp.status_code == 200
+    payload = resp.json()
+    results = payload["data"]
+
+    # Old occurrences of 'fresh query' must be excluded from its count,
+    # and 'legacy query' must not appear at all
+    assert len(results) == 1
+    assert results[0]["query_text"] == "fresh query"
+    assert results[0]["count"] == 2
+
+    # Widening the window brings the old rows back, proving days drives the filter
+    resp_wide = client.get("/api/unanswered-queries/frequent?days=90&limit=10", headers=headers)
+    assert resp_wide.status_code == 200
+    wide = {r["query_text"]: r["count"] for r in resp_wide.json()["data"]}
+    assert wide["legacy query"] == 4
+    assert wide["fresh query"] == 3
+
+
+def test_frequent_unanswered_queries_empty_state_message():
+    unique_user = f"user_frequent_empty_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    now = datetime.datetime.now(timezone.utc)
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.query_cluster import QueryCluster
+        db.query(QueryCluster).delete()
+        db.query(UnmatchedSearch).delete()
+
+        # Only stale activity: nothing inside the requested window
+        db.add(UnmatchedSearch(query_text="stale query", timestamp=now - timedelta(days=60)))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/api/unanswered-queries/frequent?days=7&limit=10", headers=headers)
+    assert resp.status_code == 200
+    payload = resp.json()
+
+    assert payload["data"] == []
+    # The message must explicitly mention the requested time window
+    assert "last 7 days" in payload["message"]
 
 
 def test_clustered_unanswered_queries():

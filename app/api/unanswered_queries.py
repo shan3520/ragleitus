@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 
 from app.db.database import get_db
@@ -55,20 +55,35 @@ def get_recent_queries(
     ]
 
 
-@router.get("/frequent")
+class FrequentQueryItem(BaseModel):
+    query_text: str
+    count: int
+
+
+class FrequentQueriesResponse(BaseModel):
+    data: List[FrequentQueryItem]
+    message: str
+
+
+@router.get("/frequent", response_model=FrequentQueriesResponse)
 def get_frequent_queries(
     limit: int = Query(10, ge=1, le=100),
+    days: int = Query(30),
     status: str = Query("open"),
     session: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     """
-    Get the most frequent unanswered queries.
+    Get the most frequent unanswered queries within the last `days` days.
     """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
     query = session.query(
         UnmatchedSearch.query_text,
         func.count(UnmatchedSearch.id).label("count")
     ).outerjoin(QueryCluster, UnmatchedSearch.id == QueryCluster.id)
+
+    query = query.filter(UnmatchedSearch.timestamp >= cutoff)
 
     if status == "open":
         query = query.filter(or_(QueryCluster.status == None, QueryCluster.status == "open"))
@@ -82,20 +97,26 @@ def get_frequent_queries(
         .limit(limit)
         .all()
     )
-    
+
     # Compute similarity matrix for the retrieved frequent queries
     if queries:
         query_texts = [q.query_text for q in queries]
         matrix = compute_query_similarity_matrix(query_texts)
         logger.info("Computed similarity matrix for %d frequent queries", len(query_texts))
-        
-    return [
-        {
-            "query_text": q.query_text,
-            "count": q.count,
-        }
-        for q in queries
-    ]
+
+    if not queries:
+        return FrequentQueriesResponse(
+            data=[],
+            message=f"No unanswered queries found in the last {days} days.",
+        )
+
+    return FrequentQueriesResponse(
+        data=[
+            FrequentQueryItem(query_text=q.query_text, count=q.count)
+            for q in queries
+        ],
+        message="Frequent unanswered queries retrieved successfully.",
+    )
 
 
 class Timeframe(BaseModel):

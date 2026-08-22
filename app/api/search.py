@@ -91,6 +91,45 @@ def list_saved_searches(
     )
 
 
+@router.get("/api/documents/saved-searches/{search_id}", response_model=SavedSearchResponse)
+def get_saved_search(
+    search_id: int,
+    user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db),
+):
+    """
+    Fetch a single saved search owned by the authenticated user.
+    """
+    saved_search = (
+        session.query(SavedSearch)
+        .filter(SavedSearch.id == search_id)
+        .first()
+    )
+    if saved_search is None or saved_search.user_id != user["username"]:
+        raise HTTPException(status_code=404, detail="Saved search not found")
+    return saved_search
+
+
+@router.delete("/api/documents/saved-searches/{search_id}", status_code=204)
+def delete_saved_search(
+    search_id: int,
+    user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db),
+):
+    """
+    Delete a saved search owned by the authenticated user.
+    """
+    saved_search = (
+        session.query(SavedSearch)
+        .filter(SavedSearch.id == search_id)
+        .first()
+    )
+    if saved_search is None or saved_search.user_id != user["username"]:
+        raise HTTPException(status_code=404, detail="Saved search not found")
+    session.delete(saved_search)
+    session.commit()
+
+
 @router.put("/api/documents/saved-searches", response_model=SavedSearchResponse)
 def upsert_saved_search(
     payload: SavedSearchUpsert,

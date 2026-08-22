@@ -357,3 +357,121 @@ def test_list_saved_searches_returns_user_searches():
         )
     finally:
         db.close()
+
+
+def test_get_saved_search_returns_search_to_owner():
+    unique_user = f"user_saved_get_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    put_resp = client.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "mine", "query_text": "owner terms", "applied_filters": {"k": "v"}},
+        headers=headers,
+    )
+    assert put_resp.status_code == 200
+    search_id = put_resp.json()["id"]
+
+    resp = client.get(f"/api/documents/saved-searches/{search_id}", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == search_id
+    assert body["user_id"] == unique_user
+    assert body["search_name"] == "mine"
+    assert body["query_text"] == "owner terms"
+    assert body["applied_filters"] == {"k": "v"}
+
+    missing_resp = client.get("/api/documents/saved-searches/999999999", headers=headers)
+    assert missing_resp.status_code == 404
+
+
+def test_get_saved_search_owned_by_other_user_returns_404():
+    from app.models.document import SavedSearch
+
+    user_a = f"user_saved_get_a_{uuid.uuid4().hex[:8]}"
+    user_b = f"user_saved_get_b_{uuid.uuid4().hex[:8]}"
+    client_a, headers_a = _get_authenticated_client(user_a)
+    client_b, headers_b = _get_authenticated_client(user_b)
+
+    put_resp = client_a.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "a-private", "query_text": "a terms"},
+        headers=headers_a,
+    )
+    assert put_resp.status_code == 200
+    a_search_id = put_resp.json()["id"]
+
+    resp = client_b.get(f"/api/documents/saved-searches/{a_search_id}", headers=headers_b)
+    # Repo convention hides foreign resources behind 404; a leak here returns
+    # 200 with user A's data instead.
+    assert resp.status_code == 404
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        row = db.query(SavedSearch).filter(SavedSearch.id == a_search_id).first()
+        assert row is not None
+        assert row.user_id == user_a
+    finally:
+        db.close()
+
+
+def test_delete_saved_search_removes_row_for_owner():
+    from app.models.document import SavedSearch
+
+    unique_user = f"user_saved_del_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    put_resp = client.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "doomed", "query_text": "delete me", "applied_filters": {"x": 1}},
+        headers=headers,
+    )
+    assert put_resp.status_code == 200
+    search_id = put_resp.json()["id"]
+
+    resp = client.delete(f"/api/documents/saved-searches/{search_id}", headers=headers)
+    assert resp.status_code == 204
+    assert resp.content == b""
+
+    # Re-read through a fresh session so a 204 without persistence fails.
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        assert db.query(SavedSearch).filter(SavedSearch.id == search_id).first() is None
+        get_after = client.get(f"/api/documents/saved-searches/{search_id}", headers=headers)
+        assert get_after.status_code == 404
+    finally:
+        db.close()
+
+
+def test_delete_saved_search_owned_by_other_user_keeps_row():
+    from app.models.document import SavedSearch
+
+    user_a = f"user_saved_del_a_{uuid.uuid4().hex[:8]}"
+    user_b = f"user_saved_del_b_{uuid.uuid4().hex[:8]}"
+    client_a, headers_a = _get_authenticated_client(user_a)
+    client_b, headers_b = _get_authenticated_client(user_b)
+
+    put_resp = client_a.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "keep-me", "query_text": "not yours", "applied_filters": None},
+        headers=headers_a,
+    )
+    assert put_resp.status_code == 200
+    a_search_id = put_resp.json()["id"]
+
+    resp = client_b.delete(f"/api/documents/saved-searches/{a_search_id}", headers=headers_b)
+    # Repo convention hides foreign resources behind 404 and must NOT delete.
+    assert resp.status_code == 404
+
+    # The row owned by user A must survive B's deletion attempt unchanged.
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        row = db.query(SavedSearch).filter(SavedSearch.id == a_search_id).first()
+        assert row is not None
+        assert row.user_id == user_a
+        assert row.search_name == "keep-me"
+        assert row.query_text == "not yours"
+    finally:
+        db.close()

@@ -40,10 +40,11 @@ def test_search_documents_endpoint():
 
     resp = client.get("/api/documents/search?q=FastAPI", headers=headers)
     assert resp.status_code == 200
-    results = resp.json()
-    assert len(results) == 1
-    assert results[0]["title"] == "Architecture Guidelines"
-    assert results[0]["score"] > 0
+    body = resp.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["title"] == "Architecture Guidelines"
+    assert body["items"][0]["score"] > 0
 
     # Verify background logging
     db_gen = get_db()
@@ -76,8 +77,9 @@ def test_search_documents_endpoint_empty():
 
     resp = client.get("/api/documents/search?q=NonExistentTerm", headers=headers)
     assert resp.status_code == 200
-    results = resp.json()
-    assert len(results) == 0
+    body = resp.json()
+    assert body["total"] == 0
+    assert body["items"] == []
 
     db_gen = get_db()
     db = next(db_gen)
@@ -91,6 +93,48 @@ def test_search_documents_endpoint_empty():
         assert last_unmatched.timestamp is not None
     finally:
         db.close()
+
+
+def test_search_documents_pagination():
+    unique_user = f"user_search_page_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        for title in ["Alpha Pagination", "Beta Pagination", "Gamma Pagination"]:
+            create_document_with_chunks(
+                session=db,
+                user_id=unique_user,
+                title=title,
+                content="This document discusses pagination deeply.",
+                chunk_contents=["pagination"],
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    resp_all = client.get("/api/documents/search?q=pagination", headers=headers)
+    assert resp_all.status_code == 200
+    body = resp_all.json()
+    # The response must be a paginated object, never the old flat array.
+    assert isinstance(body, dict)
+    assert set(body.keys()) == {"total", "items"}
+    assert body["total"] == 3
+    assert len(body["items"]) == 3
+
+    resp_page = client.get(
+        "/api/documents/search?q=pagination&limit=1&offset=1", headers=headers
+    )
+    assert resp_page.status_code == 200
+    page_body = resp_page.json()
+    # Total still counts every match even though the page is restricted.
+    assert page_body["total"] == 3
+    # limit=1 must restrict the page to a single item.
+    assert len(page_body["items"]) == 1
+    # offset=1 skips the first match rather than truncating from the front.
+    assert page_body["items"][0]["title"] == body["items"][1]["title"]
+    assert page_body["items"][0]["title"] != body["items"][0]["title"]
 
 
 def _seed_retrieval_log(username: str):

@@ -7,9 +7,14 @@ from app.api.auth import get_current_user
 from app.db.database import get_db
 from app.models.document import DocumentRetrievalLog, SavedSearch
 from app.services.document_service import list_user_documents
-from app.services.document_search import search_documents
+from app.services.document_search import SearchMatch, search_documents_paginated
 
 router = APIRouter(tags=["search"])
+
+
+class PaginatedSearchResponse(BaseModel):
+    total: int
+    items: list[SearchMatch]
 
 
 class SavedSearchUpsert(BaseModel):
@@ -28,31 +33,35 @@ class SavedSearchResponse(BaseModel):
     applied_filters: dict | None = None
 
 
-@router.get("/api/documents/search")
+@router.get("/api/documents/search", response_model=PaginatedSearchResponse)
 def search_user_documents(
     q: str,
     background_tasks: BackgroundTasks,
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     user: dict = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
     """
     Keyword search across user's document titles and chunk contents.
+
+    Returns a paginated response: `total` counts all matching documents and
+    `items` holds at most `limit` matches starting at `offset`.
     """
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Search query must not be empty")
 
     docs = list_user_documents(session, user["username"])
-    matches = search_documents(docs, q, background_tasks=background_tasks, session=session)
+    total_matches, matches = search_documents_paginated(
+        docs,
+        q,
+        background_tasks=background_tasks,
+        session=session,
+        limit=limit,
+        offset=offset,
+    )
 
-    return [
-        {
-            "document_id": match.document_id,
-            "title": match.title,
-            "score": match.score,
-            "snippet": match.snippet,
-        }
-        for match in matches
-    ]
+    return PaginatedSearchResponse(total=total_matches, items=list(matches))
 
 
 @router.post("/api/documents/search/{search_id}/documents/{document_id}/open")

@@ -86,7 +86,7 @@ def _log_search(session: Session, query: str, matched_doc_ids: list[int], durati
         pass
 
 
-def search_documents(
+def search_documents_paginated(
     documents: Sequence,
     query: str,
     get_id: callable = lambda doc: getattr(doc, "id", 0),
@@ -96,9 +96,12 @@ def search_documents(
     get_group_id: callable = lambda doc: getattr(doc, "group_id", None),
     background_tasks: BackgroundTasks | None = None,
     session: Session | None = None,
-) -> list[SearchMatch]:
+    limit: int = 10,
+    offset: int = 0,
+) -> tuple[int, list[SearchMatch]]:
     """
-    Perform a keyword search over documents, returning matches ordered by relevance.
+    Perform a keyword search over documents, returning matches ordered by
+    relevance together with the total number of matches.
 
     Relevance scoring rules:
     - Title match weight: 2.0
@@ -110,16 +113,22 @@ def search_documents(
         Iterable of document model instances.
     query : str
         Search query keyword.
+    limit : int
+        Maximum number of matches to return (applied after scoring).
+    offset : int
+        Number of leading matches to skip before applying ``limit``.
 
     Returns
     -------
-    list[SearchMatch]
-        Matches sorted by score in descending order.
+    tuple[int, list[SearchMatch]]
+        ``(total_matches, items)`` where ``total_matches`` counts every match
+        regardless of pagination and ``items`` is the current page of matches
+        sorted by score in descending order.
     """
     start_time = time.perf_counter()
 
     if not query.strip():
-        return []
+        return 0, []
 
     q_lower = query.strip().lower()
     matches: list[SearchMatch] = []
@@ -149,7 +158,7 @@ def search_documents(
             )
 
     matches.sort(key=lambda m: m.score, reverse=True)
-    
+
     if background_tasks and session:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         if not matches:
@@ -157,5 +166,49 @@ def search_documents(
         else:
             matched_ids = [m.document_id for m in matches]
             background_tasks.add_task(_log_search, session, query, matched_ids, duration_ms=duration_ms)
-        
-    return matches
+
+    total_matches = len(matches)
+    items = matches[offset : offset + limit]
+    return total_matches, items
+
+
+def search_documents(
+    documents: Sequence,
+    query: str,
+    get_id: callable = lambda doc: getattr(doc, "id", 0),
+    get_title: callable = lambda doc: getattr(doc, "title", ""),
+    get_content: callable = lambda doc: getattr(doc, "content", "") or "",
+    group_id: int | str | None = None,
+    get_group_id: callable = lambda doc: getattr(doc, "group_id", None),
+    background_tasks: BackgroundTasks | None = None,
+    session: Session | None = None,
+) -> list[SearchMatch]:
+    """
+    Backward-compatible wrapper around :func:`search_documents_paginated`
+    that returns only the list of matches.
+
+    Parameters
+    ----------
+    documents : Sequence
+        Iterable of document model instances.
+    query : str
+        Search query keyword.
+
+    Returns
+    -------
+    list[SearchMatch]
+        Matches sorted by score in descending order.
+    """
+    _, items = search_documents_paginated(
+        documents,
+        query,
+        get_id=get_id,
+        get_title=get_title,
+        get_content=get_content,
+        group_id=group_id,
+        get_group_id=get_group_id,
+        background_tasks=background_tasks,
+        session=session,
+        limit=1000,
+    )
+    return items

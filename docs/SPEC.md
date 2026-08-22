@@ -105,6 +105,33 @@ Providers - CRUD provider keys - Validate key
 
 Documents - Upload - List - Delete - Re-index
 
+Document Search - GET /api/documents/search
+
+Keyword search across the authenticated user's document titles and
+chunk contents.
+
+Query parameters: - q (required): keyword to search for - limit
+(optional, default 10): maximum number of results to return - offset
+(optional, default 0): number of results to skip before returning a
+page
+
+Response format (BREAKING CHANGE: this endpoint previously returned a
+flat JSON array of match objects; it now returns a paginated object):
+
+```
+{
+  "total": 42,
+  "items": [
+    {"document_id": 1, "title": "...", "score": 3.0, "snippet": "..."}
+  ]
+}
+```
+
+`total` is the number of matching documents regardless of paging;
+`items` holds at most `limit` matches starting at `offset`, ordered by
+descending relevance score. Clients that consumed the old flat array
+must be updated to read `items`.
+
 Chat - Start conversation - Continue conversation - Stream response
 
 Experiments - Create - Compare - Export

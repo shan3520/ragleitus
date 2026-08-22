@@ -7,7 +7,8 @@ from app.api.auth import get_current_user
 from app.db.database import get_db
 from app.models.document import DocumentRetrievalLog, SavedSearch
 from app.services.document_service import list_user_documents
-from app.services.document_search import SearchMatch, search_documents_paginated
+from app.services.document_search import SearchMatch, search_documents
+from app.services.hybrid_search import combine_scores
 
 router = APIRouter(tags=["search"])
 
@@ -45,23 +46,39 @@ def search_user_documents(
     """
     Keyword search across user's document titles and chunk contents.
 
-    Returns a paginated response: `total` counts all matching documents and
-    `items` holds at most `limit` matches starting at `offset`.
+    Keyword scores are merged through the hybrid scorer, which returns a
+    paginated response: `total` counts every merged match and `items` holds
+    at most `limit` matches starting at `offset`.
     """
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Search query must not be empty")
 
     docs = list_user_documents(session, user["username"])
-    total_matches, matches = search_documents_paginated(
-        docs,
-        q,
+    keyword_matches = search_documents(docs, q)
+    keyword_scores = {m.document_id: m.score for m in keyword_matches}
+
+    page = combine_scores(
+        keyword_scores,
+        {},
+        query=q,
         background_tasks=background_tasks,
         session=session,
+        skip=offset,
         limit=limit,
-        offset=offset,
     )
 
-    return PaginatedSearchResponse(total=total_matches, items=list(matches))
+    by_id = {m.document_id: m for m in keyword_matches}
+    items = [
+        SearchMatch(
+            document_id=doc_id,
+            title=by_id[doc_id].title,
+            score=score,
+            snippet=by_id[doc_id].snippet,
+        )
+        for doc_id, score in page["items"]
+    ]
+
+    return PaginatedSearchResponse(total=page["total"], items=items)
 
 
 @router.post("/api/documents/search/{search_id}/documents/{document_id}/open")

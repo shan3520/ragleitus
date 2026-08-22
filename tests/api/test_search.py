@@ -190,3 +190,170 @@ def test_log_document_open_missing_log_returns_404_without_creating():
         )
     finally:
         db.close()
+
+
+def test_list_saved_searches_empty():
+    from app.models.document import SavedSearch
+
+    unique_user = f"user_saved_empty_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    resp = client.get("/api/documents/saved-searches", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    # Nothing was persisted for this user by the empty listing.
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        assert (
+            db.query(SavedSearch).filter(SavedSearch.user_id == unique_user).count() == 0
+        )
+    finally:
+        db.close()
+
+
+def test_upsert_saved_search_creates_new():
+    from app.models.document import SavedSearch
+
+    unique_user = f"user_saved_new_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    payload = {
+        "search_name": "daily-report",
+        "query_text": "quarterly revenue",
+        "applied_filters": {"status": "completed", "group": "finance"},
+    }
+    resp = client.put("/api/documents/saved-searches", json=payload, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] > 0
+    assert body["user_id"] == unique_user
+    assert body["search_name"] == "daily-report"
+    assert body["query_text"] == "quarterly revenue"
+    assert body["applied_filters"] == {"status": "completed", "group": "finance"}
+
+    # The returned id must belong to a row actually persisted for this user.
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        rows = db.query(SavedSearch).filter(SavedSearch.user_id == unique_user).all()
+        assert len(rows) == 1
+        assert rows[0].id == body["id"]
+        assert rows[0].search_name == "daily-report"
+        assert rows[0].query_text == "quarterly revenue"
+        assert rows[0].applied_filters == {"status": "completed", "group": "finance"}
+    finally:
+        db.close()
+
+
+def test_upsert_saved_search_updates_existing():
+    from app.models.document import SavedSearch
+
+    unique_user = f"user_saved_update_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    first = client.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "triage", "query_text": "error logs", "applied_filters": None},
+        headers=headers,
+    )
+    assert first.status_code == 200
+    original_id = first.json()["id"]
+
+    second = client.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "triage", "query_text": "warning logs", "applied_filters": {"level": "warn"}},
+        headers=headers,
+    )
+    assert second.status_code == 200
+    updated = second.json()
+    assert updated["id"] == original_id
+    assert updated["user_id"] == unique_user
+    assert updated["search_name"] == "triage"
+    assert updated["query_text"] == "warning logs"
+    assert updated["applied_filters"] == {"level": "warn"}
+
+    # Exactly one row must exist for (user, search_name): an upsert must not
+    # insert a duplicate under the same name, nor leave stale values behind.
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        rows = (
+            db.query(SavedSearch)
+            .filter(SavedSearch.user_id == unique_user, SavedSearch.search_name == "triage")
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].id == original_id
+        assert rows[0].query_text == "warning logs"
+        assert rows[0].applied_filters == {"level": "warn"}
+    finally:
+        db.close()
+
+
+def test_list_saved_searches_returns_user_searches():
+    from app.models.document import SavedSearch
+
+    user_a = f"user_saved_list_a_{uuid.uuid4().hex[:8]}"
+    user_b = f"user_saved_list_b_{uuid.uuid4().hex[:8]}"
+    client_a, headers_a = _get_authenticated_client(user_a)
+
+    resp_a_put = client_a.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "alpha", "query_text": "alpha terms", "applied_filters": {"tag": "a"}},
+        headers=headers_a,
+    )
+    assert resp_a_put.status_code == 200
+    alpha_id = resp_a_put.json()["id"]
+    resp_a_put2 = client_a.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "beta", "query_text": "beta terms"},
+        headers=headers_a,
+    )
+    assert resp_a_put2.status_code == 200
+    beta_id = resp_a_put2.json()["id"]
+
+    client_b, headers_b = _get_authenticated_client(user_b)
+    # Same name as one of user A's saved searches: names are only unique per user.
+    resp_b_put = client_b.put(
+        "/api/documents/saved-searches",
+        json={"search_name": "alpha", "query_text": "b sees different docs"},
+        headers=headers_b,
+    )
+    assert resp_b_put.status_code == 200
+    b_alpha_id = resp_b_put.json()["id"]
+    assert b_alpha_id != alpha_id
+
+    resp_a_get = client_a.get("/api/documents/saved-searches", headers=headers_a)
+    assert resp_a_get.status_code == 200
+    listings_a = resp_a_get.json()
+    assert len(listings_a) == 2
+    assert {item["id"] for item in listings_a} == {alpha_id, beta_id}
+    assert {item["search_name"] for item in listings_a} == {"alpha", "beta"}
+    for item in listings_a:
+        assert item["user_id"] == user_a
+
+    resp_b_get = client_b.get("/api/documents/saved-searches", headers=headers_b)
+    assert resp_b_get.status_code == 200
+    listings_b = resp_b_get.json()
+    assert len(listings_b) == 1
+    assert listings_b[0]["id"] == b_alpha_id
+    assert listings_b[0]["user_id"] == user_b
+    assert listings_b[0]["search_name"] == "alpha"
+
+    # Cross-user isolation at the persistence layer: user B must own exactly
+    # one row, and none of user A's rows may carry B's identity.
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        assert db.query(SavedSearch).filter(SavedSearch.user_id == user_a).count() == 2
+        assert db.query(SavedSearch).filter(SavedSearch.user_id == user_b).count() == 1
+        assert (
+            db.query(SavedSearch)
+            .filter(SavedSearch.user_id == user_b, SavedSearch.id.in_([alpha_id, beta_id]))
+            .count()
+            == 0
+        )
+    finally:
+        db.close()

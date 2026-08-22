@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, Float, Integer, String, ForeignKey, Text, DateTime
+from sqlalchemy import Column, Float, Integer, String, ForeignKey, Text, DateTime, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from .evaluation import Base
@@ -44,7 +44,7 @@ class UnmatchedSearch(Base):
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
-__all__ = ["Document", "Chunk", "UnmatchedSearch", "SearchQueryLog", "DocumentRetrievalLog"]
+__all__ = ["Document", "Chunk", "UnmatchedSearch", "SearchQueryLog", "DocumentRetrievalLog", "SavedSearch"]
 
 class SearchQueryLog(Base):
     __tablename__ = "search_query_logs"
@@ -68,3 +68,17 @@ class DocumentRetrievalLog(Base):
 
     query_log = relationship("SearchQueryLog", back_populates="retrievals")
     document = relationship("Document")
+
+
+class SavedSearch(Base):
+    __tablename__ = "saved_searches"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(255), nullable=False, index=True)
+    search_name = Column(String(255), nullable=False)
+    query_text = Column(String(255), nullable=False)
+    applied_filters = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "search_name", name="uq_saved_searches_user_id_search_name"),
+    )

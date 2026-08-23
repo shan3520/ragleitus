@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -64,3 +66,40 @@ def test_counts_only_negative_feedback_as_impact(session):
     score = calculate_document_negative_impact(session, doc.id)
 
     assert score == 3.0
+
+
+def test_negative_impact_counts_full_history_without_limits_or_windows(session):
+    doc = Document(user_id=1, title="Long History Doc")
+    session.add(doc)
+    session.flush()
+    other_docs = [Document(user_id=1, title=f"Other Doc {i}") for i in range(3)]
+    session.add_all(other_docs)
+    session.flush()
+
+    old_timestamp = datetime.now(timezone.utc) - timedelta(days=90)
+
+    def _bulk_add_negative_feedback(feedback_count, documents, created_at):
+        query_logs = [
+            SearchQueryLog(query_text=f"bulk negative query {created_at} {i}")
+            for i in range(feedback_count)
+        ]
+        session.add_all(query_logs)
+        session.flush()
+        session.add_all(
+            SearchFeedback(
+                search_log_id=q.id,
+                is_positive=False,
+                created_at=created_at,
+                documents=list(documents),
+            )
+            for q in query_logs
+        )
+        session.flush()
+
+    _bulk_add_negative_feedback(1300, [doc], old_timestamp)
+    _bulk_add_negative_feedback(1600, other_docs, datetime.now(timezone.utc))
+    session.commit()
+
+    score = calculate_document_negative_impact(session, doc.id)
+
+    assert score == 1300.0

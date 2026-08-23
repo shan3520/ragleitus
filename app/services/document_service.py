@@ -6,14 +6,39 @@ Decouples API route handlers from direct SQLAlchemy ORM querying.
 
 from typing import Optional, Sequence
 from datetime import datetime, timezone
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models.document import Document, Chunk
+from app.models.feedback import SearchFeedback
 
 
 def list_user_documents(session: Session, user_id: str) -> list[Document]:
-    """List all documents owned by a specific user."""
-    return session.query(Document).filter_by(user_id=user_id).all()
+    """List all documents owned by a specific user.
+
+    Each document is fetched together with its aggregated statistics (the
+    count of negative feedback records) in a single query: a LEFT OUTER JOIN
+    over the related feedback records with GROUP BY, so documents with no
+    related records are still returned with a stat of 0 and callers need no
+    per-document follow-up queries.
+    """
+    rows = (
+        session.query(
+            Document,
+            func.count(
+                case((SearchFeedback.is_positive == False, SearchFeedback.id))
+            ).label("negative_impact"),
+        )
+        .outerjoin(Document.feedbacks)
+        .filter(Document.user_id == user_id)
+        .group_by(Document.id)
+        .all()
+    )
+    documents = []
+    for document, negative_count in rows:
+        document.negative_impact = float(negative_count or 0)
+        documents.append(document)
+    return documents
 
 
 def get_user_document(session: Session, document_id: int, user_id: str) -> Optional[Document]:

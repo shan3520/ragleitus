@@ -1,8 +1,10 @@
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.models.evaluation import Base
+from app.models.document import Document, SearchQueryLog
+from app.models.feedback import SearchFeedback
 from app.services.document_service import (
     create_document_with_chunks,
     list_user_documents,
@@ -64,6 +66,95 @@ def test_document_service_crud_flow():
 
 
 from unittest.mock import patch
+
+def _add_feedback(session, document, is_positive):
+    log = SearchQueryLog(query_text=f"query-{document.id}-{is_positive}")
+    session.add(log)
+    session.flush()
+    feedback = SearchFeedback(search_log_id=log.id, is_positive=is_positive)
+    feedback.documents.append(document)
+    session.add(feedback)
+    return feedback
+
+
+def test_list_user_documents_aggregates_negative_impact_without_cross_contamination():
+    session = _setup_in_memory_db()
+
+    doc_none = create_document_with_chunks(
+        session=session, user_id="agg_user", title="NoFeedbackDoc",
+        content="Full text content", chunk_contents=["a", "b"],
+    )
+    doc_one = create_document_with_chunks(
+        session=session, user_id="agg_user", title="OneNegativeDoc",
+        content="Full text content", chunk_contents=["a"],
+    )
+    doc_three = create_document_with_chunks(
+        session=session, user_id="agg_user", title="ThreeNegativesDoc",
+        content="Full text content", chunk_contents=["a", "b", "c"],
+    )
+    other_user_doc = create_document_with_chunks(
+        session=session, user_id="someone_else", title="OtherUserDoc",
+        content="Full text content", chunk_contents=["a"],
+    )
+    session.flush()
+
+    _add_feedback(session, doc_one, False)
+    _add_feedback(session, doc_one, True)
+    _add_feedback(session, doc_one, True)
+    for _ in range(3):
+        _add_feedback(session, doc_three, False)
+        _add_feedback(session, other_user_doc, False)
+
+    session.commit()
+
+    result = list_user_documents(session, "agg_user")
+
+    assert isinstance(result, list)
+    assert len(result) == 3
+    assert all(isinstance(doc, Document) for doc in result)
+
+    by_id = {doc.id: doc for doc in result}
+    assert set(by_id) == {doc_none.id, doc_one.id, doc_three.id}
+
+    assert by_id[doc_none.id].negative_impact == 0.0
+    assert isinstance(by_id[doc_none.id].negative_impact, float)
+    assert by_id[doc_one.id].negative_impact == 1.0
+    assert by_id[doc_three.id].negative_impact == 3.0
+
+
+def test_list_user_documents_issues_a_single_query():
+    session = _setup_in_memory_db()
+
+    doc_a = create_document_with_chunks(
+        session=session, user_id="query_user", title="DocA",
+        content="Full text content", chunk_contents=["a", "b"],
+    )
+    doc_b = create_document_with_chunks(
+        session=session, user_id="query_user", title="DocB",
+        content="Full text content", chunk_contents=["a"],
+    )
+    session.flush()
+    for _ in range(2):
+        _add_feedback(session, doc_a, False)
+    _add_feedback(session, doc_b, True)
+
+    session.commit()
+
+    statements = []
+
+    def _record_select(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    engine = session.get_bind()
+    event.listen(engine, "before_cursor_execute", _record_select)
+    try:
+        result = list_user_documents(session, "query_user")
+    finally:
+        event.remove(engine, "before_cursor_execute", _record_select)
+
+    assert len(result) == 2
+    assert len(statements) == 1
 
 @patch("app.services.document_service.invalidate_staleness_cache")
 def test_mark_document_reviewed(mock_invalidate):

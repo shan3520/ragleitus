@@ -135,6 +135,7 @@ from app.core.errors import NoSearchActivityError
 from app.models import Base
 from app.models.document import Document, DocumentRetrievalLog, SearchQueryLog
 from app.services.document_stats import get_unsearched_documents, get_underperforming_document_ids
+from app.services.staleness_scoring import invalidate_staleness_cache
 
 
 @pytest.fixture()
@@ -333,3 +334,35 @@ def test_underperforming_ids_respect_min_shown_threshold(db_session):
         db_session, [low.id, high.id], days=30
     )
     assert baseline == {low.id, high.id}
+
+
+def test_compute_document_stats_usage_not_truncated_by_top_n(db_session):
+    """Document statistics must aggregate usage over the document's complete
+    history even when that history is larger than the former global top-N
+    slice (1000 records). Most of this document's history lies outside the
+    old analytics window, so any remaining truncation would cap or ignore
+    records and fail these asserts."""
+    invalidate_staleness_cache()
+    doc = Document(
+        title="busy doc",
+        status="ready",
+        last_reviewed_at=datetime.utcnow() - timedelta(days=10),
+    )
+    db_session.add(doc)
+    db_session.commit()
+
+    old_log = _add_search_log(
+        db_session, "old query", datetime.utcnow() - timedelta(days=40)
+    )
+    recent_log = _add_search_log(
+        db_session, "recent query", datetime.utcnow() - timedelta(days=1)
+    )
+    _add_retrievals(db_session, old_log, doc, 1200)
+    _add_retrievals(db_session, recent_log, doc, 100)
+
+    result = compute_document_stats([doc], db=db_session)
+
+    expected_staleness = 10 * 2.0 + (1200 + 100) * 5.0  # 6520.0
+    assert result.total_documents == 1
+    assert result.max_staleness_score == expected_staleness
+    assert result.avg_staleness_score == round(expected_staleness / 1, 2)

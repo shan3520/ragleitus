@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from app.services import usage_analytics, feedback_service
+from app.services import feedback_service
 from app.models.document import DocumentRetrievalLog, SearchQueryLog
 from app.core.cache import MemoryCache
 
@@ -33,11 +33,12 @@ def compute_staleness_score(db: Session, document) -> float:
         doc_id = getattr(document, "id", None)
         if doc_id is not None:
             # Usage penalty
-            popular_docs = usage_analytics.get_popular_documents(db, limit=1000)
-            for doc_stat in popular_docs:
-                if doc_stat["document_id"] == doc_id:
-                    score += doc_stat["count"] * 5.0
-                    break
+            usage_count = (
+                db.query(DocumentRetrievalLog)
+                .filter(DocumentRetrievalLog.document_id == doc_id)
+                .count()
+            )
+            score += usage_count * 5.0
                     
             # Feedback penalty
             top_neg_queries = feedback_service.get_top_negative_feedback_queries(db, limit=1000)

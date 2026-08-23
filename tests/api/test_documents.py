@@ -158,3 +158,100 @@ def test_list_documents_sorts_by_negative_impact():
             next(db_gen)
         except StopIteration:
             pass
+
+
+def test_list_documents_query_count_does_not_scale_with_document_count():
+    import uuid
+
+    from sqlalchemy import event
+
+    from app.db.database import engine, get_db
+    from app.models.document import SearchQueryLog
+    from app.models.feedback import SearchFeedback
+    from app.services.document_service import create_document_with_chunks
+
+    run_suffix = uuid.uuid4().hex[:8]
+    scaling_user = f"query_scaling_user_{run_suffix}"
+    baseline_user = f"query_baseline_user_{run_suffix}"
+
+    client, headers = _get_authenticated_client(scaling_user)
+    baseline_client, baseline_headers = _get_authenticated_client(baseline_user)
+
+    db_gen = get_db()
+    session = next(db_gen)
+
+    try:
+        create_document_with_chunks(
+            session=session,
+            user_id=baseline_user,
+            title="single_doc",
+            content="content",
+            chunk_contents=[],
+        )
+        session.commit()
+
+        expected_impacts = {}
+        for idx in range(6):
+            doc = create_document_with_chunks(
+                session=session,
+                user_id=scaling_user,
+                title=f"scaling_doc_{idx}",
+                content="content",
+                chunk_contents=[],
+            )
+            session.flush()
+            for _ in range(idx):
+                query_log = SearchQueryLog(query_text=f"negative query scaling {idx}")
+                session.add(query_log)
+                session.flush()
+                feedback = SearchFeedback(
+                    search_log_id=query_log.id,
+                    is_positive=False,
+                    documents=[doc],
+                )
+                session.add(feedback)
+            expected_impacts[doc.id] = float(idx)
+        session.commit()
+
+        def _count_selects(do_request):
+            statements = []
+
+            def _record_select(conn, cursor, statement, parameters, context, executemany):
+                if statement.lstrip().upper().startswith("SELECT"):
+                    statements.append(statement)
+
+            event.listen(engine, "before_cursor_execute", _record_select)
+            try:
+                response = do_request()
+                assert response.status_code == 200
+                return response.json(), len(statements)
+            finally:
+                event.remove(engine, "before_cursor_execute", _record_select)
+
+        payload_multi, selects_multi = _count_selects(
+            lambda: client.get("/api/documents", headers=headers)
+        )
+        payload_single, selects_single = _count_selects(
+            lambda: baseline_client.get("/api/documents", headers=baseline_headers)
+        )
+
+        # N+1 regression guard: serving 6 documents must not cost more queries
+        # than serving 1.
+        assert selects_multi == selects_single
+
+        assert len(payload_multi) == 6
+        by_id = {item["id"]: item for item in payload_multi}
+        assert set(by_id) == set(expected_impacts)
+        for doc_id, item in by_id.items():
+            assert set(item) == {"id", "user_id", "title", "negative_impact"}
+            assert item["user_id"] == scaling_user
+            assert item["title"].startswith("scaling_doc_")
+            assert item["negative_impact"] == expected_impacts[doc_id]
+
+        scores = [item["negative_impact"] for item in payload_multi]
+        assert scores == sorted(scores, reverse=True)
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass

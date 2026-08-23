@@ -5,6 +5,7 @@ from app.api.auth import get_current_user
 from app.db.database import get_db
 from app.services.pdf_extraction import extract_pdf_pages
 from app.services import document_service
+from app.services.feedback_service import calculate_document_negative_impact
 
 router = APIRouter()
 
@@ -15,10 +16,17 @@ get_db_session = get_db
 @router.get("/api/documents")
 def list_documents(user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
     documents = document_service.list_user_documents(session, user["username"])
-    return [
-        {"id": document.id, "user_id": document.user_id, "title": document.title}
+    items = [
+        {
+            "id": document.id,
+            "user_id": document.user_id,
+            "title": document.title,
+            "negative_impact": calculate_document_negative_impact(session, document.id),
+        }
         for document in documents
     ]
+    items.sort(key=lambda item: item["negative_impact"], reverse=True)
+    return items
 
 
 @router.post("/documents/extract")

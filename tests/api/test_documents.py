@@ -101,3 +101,60 @@ def test_review_document_endpoint():
             next(db_gen)
         except StopIteration:
             pass
+
+
+def test_list_documents_sorts_by_negative_impact():
+    from app.services.document_service import create_document_with_chunks
+    from app.db.database import get_db
+    from app.models.document import SearchQueryLog
+    from app.models.feedback import SearchFeedback
+
+    client, headers = _get_authenticated_client("impact_sort_user")
+
+    db_gen = get_db()
+    session = next(db_gen)
+
+    try:
+        doc_ids = {}
+        for title, negative_count in [
+            ("impact_none", 0),
+            ("impact_single", 1),
+            ("impact_heavy", 3),
+        ]:
+            doc = create_document_with_chunks(
+                session=session,
+                user_id="impact_sort_user",
+                title=title,
+                content="Impact sorting content",
+                chunk_contents=[],
+            )
+            session.commit()
+
+            for _ in range(negative_count):
+                query_log = SearchQueryLog(query_text=f"negative query for {title}")
+                session.add(query_log)
+                session.flush()
+                feedback = SearchFeedback(
+                    search_log_id=query_log.id,
+                    is_positive=False,
+                    documents=[doc],
+                )
+                session.add(feedback)
+            session.commit()
+            doc_ids[title] = doc.id
+
+        response = client.get("/api/documents", headers=headers)
+        assert response.status_code == 200
+        payload = response.json()
+
+        ids = [item["id"] for item in payload]
+        scores = [item["negative_impact"] for item in payload]
+
+        assert ids.index(doc_ids["impact_heavy"]) < ids.index(doc_ids["impact_single"])
+        assert ids.index(doc_ids["impact_single"]) < ids.index(doc_ids["impact_none"])
+        assert scores == sorted(scores, reverse=True)
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass

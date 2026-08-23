@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
 from app.models.feedback import SearchFeedback
-from app.models.document import SearchQueryLog, DocumentRetrievalLog
+from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
 
 def create_feedback(db: Session, search_log_id: int, is_positive: bool, comment: str = None) -> SearchFeedback:
     feedback = SearchFeedback(
@@ -69,3 +69,14 @@ def get_top_negative_feedback_queries(db: Session, limit: int = 10):
         }
         for r in results
     ]
+
+def calculate_document_negative_impact(db: Session, document_id: int) -> float:
+    count = (
+        db.query(func.count(SearchFeedback.id))
+        .join(SearchFeedback.documents)
+        .filter(Document.id == document_id)
+        .filter(SearchFeedback.is_positive == False)
+        .scalar()
+    )
+    
+    return float(count or 0)

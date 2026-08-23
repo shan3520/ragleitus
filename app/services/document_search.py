@@ -199,8 +199,9 @@ def search_documents(
     list[SearchMatch]
         Matches sorted by score in descending order.
     """
+    docs = list(documents)
     _, items = search_documents_paginated(
-        documents,
+        docs,
         query,
         get_id=get_id,
         get_title=get_title,
@@ -209,6 +210,6 @@ def search_documents(
         get_group_id=get_group_id,
         background_tasks=background_tasks,
         session=session,
-        limit=1000,
+        limit=len(docs),
     )
     return items

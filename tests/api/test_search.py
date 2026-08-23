@@ -137,6 +137,42 @@ def test_search_documents_pagination():
     assert page_body["items"][0]["title"] != body["items"][0]["title"]
 
 
+def test_search_total_not_capped_at_1000_matches():
+    unique_user = f"user_cap_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    seeded = 1017
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        for i in range(seeded):
+            create_document_with_chunks(
+                session=db,
+                user_id=unique_user,
+                title=f"Cap Probe {i:04d}",
+                content="Generic filler body content.",
+                chunk_contents=["generic filler"],
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get(
+        "/api/documents/search?q=Cap Probe&limit=5&offset=0", headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # The exact unpaginated match count from the service layer must reach the
+    # response untouched: any 1000-cap or truncation fails these assertions.
+    assert seeded > 1000
+    assert body["total"] == seeded
+    # Pagination still restricts only the page itself, never the total.
+    assert len(body["items"]) == 5
+    for item in body["items"]:
+        assert "Cap Probe" in item["title"]
+
+
 def _seed_retrieval_log(username: str):
     rate_limiter.reset()
     client = TestClient(app)

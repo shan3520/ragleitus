@@ -1,6 +1,10 @@
 """Tests for app.services.document_search."""
 
-from app.services.document_search import generate_snippet, search_documents
+from app.services.document_search import (
+    generate_snippet,
+    search_documents,
+    search_documents_paginated,
+)
 
 
 class _FakeDoc:
@@ -86,4 +90,40 @@ def test_search_documents_group_id_filter():
 
     matches_none = search_documents(docs, "Python")
     assert len(matches_none) == 3
+
+
+def _matching_docs(count: int) -> list[_FakeDoc]:
+    return [
+        _FakeDoc(i, f"needle document {i}", "filler body text")
+        for i in range(1, count + 1)
+    ]
+
+
+def test_search_documents_paginated_total_is_exact_beyond_1000():
+    docs = _matching_docs(1250)
+
+    total, items = search_documents_paginated(docs, "needle", limit=10, offset=0)
+
+    # Total must count every match; an internal cap (e.g. 1000) fails here.
+    assert total == 1250
+    # The page itself is still restricted by limit.
+    assert len(items) == 10
+    assert all(m.score == 2.0 for m in items)
+
+
+def test_search_documents_paginated_total_is_exact_with_offset_past_page():
+    docs = _matching_docs(1250)
+
+    total, items = search_documents_paginated(docs, "needle", limit=10, offset=1245)
+
+    assert total == 1250
+    assert len(items) == 5
+
+
+def test_search_documents_returns_every_match_without_1000_cap():
+    docs = _matching_docs(1250)
+
+    matches = search_documents(docs, "needle")
+
+    assert len(matches) == 1250
 

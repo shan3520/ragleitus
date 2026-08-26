@@ -85,7 +85,9 @@ class UnderperformingDocument(BaseModel):
 def api_underperforming_documents(
     user: dict = Depends(get_current_user),
     session: Session = Depends(get_db),
-    min_retrievals: int = 5,
+    # No popularity floor by default. Callers that want one pass it; see
+    # get_underperforming_document_ids for why five was the wrong default.
+    min_retrievals: int = 0,
     days: int = 30,
     min_shown: int | None = None,
 ):

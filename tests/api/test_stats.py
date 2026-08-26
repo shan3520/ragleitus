@@ -435,7 +435,7 @@ def test_underperforming_documents_excludes_zero_returns_and_honors_min_shown():
         db.add(log)
         db.commit()
 
-        # doc_mid: 6 retrievals (clears default min_retrievals=5 but not 8)
+        # doc_mid: 6 retrievals (clears min_shown=8? no - that is the point)
         # doc_high: 9 retrievals; doc_zero: never retrieved at all.
         rs = [DocumentRetrievalLog(query_log_id=log.id, document_id=doc_mid_id) for _ in range(6)]
         rs += [DocumentRetrievalLog(query_log_id=log.id, document_id=doc_high_id) for _ in range(9)]
@@ -654,3 +654,103 @@ def test_dead_documents_response_contains_only_id_title_created_at():
         datetime.fromisoformat(item["created_at"].replace("Z", "+00:00"))
     finally:
         _wipe_documents_and_logs()
+
+
+def test_underperforming_documents_endpoint_applies_no_popularity_floor():
+    """The operator's complaint, at the layer they actually use.
+
+    A document with two complaints on a question four people ran must appear
+    on the needs-attention list, and must rank above a document with the same
+    two complaints spread over fifty retrievals - it upset half its readers
+    against four percent. The endpoint used to default min_retrievals to 5 and
+    dropped the first document before its feedback was ever counted.
+
+    Separate from the service-level test because the number lived in two
+    places: fixing the service alone leaves the endpoint passing 5.
+    """
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        from app.models.feedback import SearchFeedback, document_feedback
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document, Chunk
+        db.execute(document_feedback.delete())
+        db.query(SearchFeedback).delete()
+        db.query(DocumentRetrievalLog).delete()
+        db.query(SearchQueryLog).delete()
+        db.query(Chunk).delete()
+        db.query(Document).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
+    client, headers = _get_authenticated_client(unique_user)
+
+    db_gen = get_db()
+    db = next(db_gen)
+    unpopular_id, popular_id = None, None
+    try:
+        from app.models.feedback import SearchFeedback, document_feedback
+        from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+
+        unpopular = Document(title="Niche but disliked", status="ready", user_id=unique_user)
+        popular = Document(title="Busy and mostly fine", status="ready", user_id=unique_user)
+        db.add_all([unpopular, popular])
+        db.commit()
+        unpopular_id, popular_id = unpopular.id, popular.id
+
+        log = SearchQueryLog(query_text="popularity probe", timestamp=now)
+        db.add(log)
+        db.commit()
+
+        # 4 retrievals - under the old floor of 5, so invisible before this fix.
+        rs = [DocumentRetrievalLog(query_log_id=log.id, document_id=unpopular_id) for _ in range(4)]
+        rs += [DocumentRetrievalLog(query_log_id=log.id, document_id=popular_id) for _ in range(50)]
+        db.add_all(rs)
+        db.commit()
+
+        # Same two complaints against each: only the denominator differs.
+        for doc in (unpopular, popular):
+            fbs = [
+                SearchFeedback(search_log_id=log.id, is_positive=False, created_at=now)
+                for _ in range(2)
+            ]
+            for fb in fbs:
+                fb.documents.append(doc)
+            db.add_all(fbs)
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        resp = client.get("/api/stats/underperforming-documents", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        ids = [item["document_id"] for item in data]
+
+        assert unpopular_id in ids, "a document nobody searches for is still a document people complain about"
+        assert ids[0] == unpopular_id, "2 complaints in 4 retrievals must outrank 2 in 50"
+
+        # The floor is still available to anyone who asks for it by name.
+        narrowed = client.get(
+            "/api/stats/underperforming-documents?min_retrievals=5", headers=headers
+        )
+        assert narrowed.status_code == 200
+        assert [i["document_id"] for i in narrowed.json()] == [popular_id]
+    finally:
+        db_gen = get_db()
+        cleanup_db = next(db_gen)
+        try:
+            from app.models.feedback import SearchFeedback, document_feedback
+            from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document, Chunk
+            cleanup_db.execute(document_feedback.delete())
+            cleanup_db.query(SearchFeedback).delete()
+            cleanup_db.query(DocumentRetrievalLog).delete()
+            cleanup_db.query(SearchQueryLog).delete()
+            cleanup_db.query(Chunk).delete()
+            cleanup_db.query(Document).delete()
+            cleanup_db.commit()
+        finally:
+            cleanup_db.close()

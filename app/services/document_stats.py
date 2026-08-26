@@ -115,7 +115,7 @@ def get_underperforming_document_ids(
     session,
     doc_ids: Sequence[int],
     days: int = 30,
-    min_retrievals: int = 5,
+    min_retrievals: int = 0,
     min_shown: int | None = None,
 ) -> set[int]:
     """
@@ -124,8 +124,16 @@ def get_underperforming_document_ids(
 
     Documents with zero search returns in the window are strictly excluded:
     they have never been surfaced to a user, so there is no performance
-    signal to judge them by. When ``min_shown`` is provided it acts as an
-    additional floor on top of ``min_retrievals``.
+    signal to judge them by. That is the only exclusion applied by default.
+
+    ``min_retrievals`` and ``min_shown`` are optional popularity floors and
+    both are off unless a caller asks for them. ``min_retrievals`` used to
+    default to 5, which meant a document that upset three people about a
+    question nobody else asks was dropped before its feedback was ever
+    counted - the retrieval count measures how popular the question was, not
+    how much trouble the document caused, and those documents are exactly
+    what a needs-attention list is for. A caller that genuinely wants a
+    busy-documents view can still ask for one.
     """
     start_time = datetime.now(timezone.utc) - timedelta(days=days)
     retrieval_count = func.count(DocumentRetrievalLog.id)
@@ -138,10 +146,13 @@ def get_underperforming_document_ids(
             DocumentRetrievalLog.document_id.in_(list(doc_ids)),
         )
         .group_by(DocumentRetrievalLog.document_id)
-        # Strict exclusion of documents with exactly 0 search returns.
+        # Strict exclusion of documents with exactly 0 search returns. This is
+        # a signal test, not a popularity test: nothing is known about a
+        # document nobody has been shown.
         .having(retrieval_count > 0)
-        .having(retrieval_count >= min_retrievals)
     )
+    if min_retrievals:
+        query = query.having(retrieval_count >= min_retrievals)
     if min_shown is not None:
         query = query.having(retrieval_count >= min_shown)
 

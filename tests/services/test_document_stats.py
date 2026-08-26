@@ -336,6 +336,41 @@ def test_underperforming_ids_respect_min_shown_threshold(db_session):
     assert baseline == {low.id, high.id}
 
 
+def test_underperforming_ids_do_not_require_a_popular_question(db_session):
+    """A document that caused trouble on a question few people ask must still
+    be a candidate. The default floor of five retrievals dropped it before any
+    feedback was counted, which decided the needs-attention list by how popular
+    the question was rather than by how much trouble the document caused."""
+    now = datetime.utcnow()
+    unpopular = _add_document(db_session, "unpopular but disliked")
+
+    log = _add_search_log(db_session, "niche query", now)
+    _add_retrievals(db_session, log, unpopular, 4)
+
+    result = get_underperforming_document_ids(db_session, [unpopular.id], days=30)
+
+    assert unpopular.id in result
+
+
+def test_underperforming_ids_still_honour_an_explicit_floor(db_session):
+    """Removing the default must not remove the option. A caller that asks for
+    a busy-documents view still gets one, which is what keeps this a default
+    change rather than a deleted feature."""
+    now = datetime.utcnow()
+    quiet = _add_document(db_session, "quiet doc")
+    busy = _add_document(db_session, "busy doc")
+
+    log = _add_search_log(db_session, "floor query", now)
+    _add_retrievals(db_session, log, quiet, 4)
+    _add_retrievals(db_session, log, busy, 7)
+
+    result = get_underperforming_document_ids(
+        db_session, [quiet.id, busy.id], days=30, min_retrievals=5
+    )
+
+    assert result == {busy.id}
+
+
 def test_compute_document_stats_usage_not_truncated_by_top_n(db_session):
     """Document statistics must aggregate usage over the document's complete
     history even when that history is larger than the former global top-N

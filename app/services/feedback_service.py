@@ -1,8 +1,10 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
-from app.models.feedback import SearchFeedback
+from app.models.feedback import SearchFeedback, document_feedback
 from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
+
+NEGATIVE_FEEDBACK_THRESHOLD = 3
 
 def create_feedback(db: Session, search_log_id: int, is_positive: bool, comment: str = None) -> SearchFeedback:
     feedback = SearchFeedback(
@@ -19,6 +21,20 @@ def create_feedback(db: Session, search_log_id: int, is_positive: bool, comment:
     db.add(feedback)
     db.commit()
     db.refresh(feedback)
+
+    if not is_positive:
+        for doc in feedback.documents:
+            negative_count = (
+                db.query(func.count(SearchFeedback.id))
+                .join(document_feedback, document_feedback.c.search_feedback_id == SearchFeedback.id)
+                .filter(document_feedback.c.document_id == doc.id)
+                .filter(SearchFeedback.is_positive == False)
+                .scalar()
+            )
+            if negative_count is not None and negative_count >= NEGATIVE_FEEDBACK_THRESHOLD:
+                doc.review_status = "needs_review"
+        db.commit()
+
     return feedback
 
 def get_recent_negative_feedback(db: Session, limit: int = 10):

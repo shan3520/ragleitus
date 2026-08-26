@@ -5,9 +5,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.evaluation import Base
-from app.models.document import Document, SearchQueryLog
+from app.models.document import Document, SearchQueryLog, DocumentRetrievalLog
 from app.models.feedback import SearchFeedback
-from app.services.feedback_service import calculate_document_negative_impact
+from app.services.feedback_service import calculate_document_negative_impact, create_feedback
 
 
 @pytest.fixture
@@ -103,3 +103,49 @@ def test_negative_impact_counts_full_history_without_limits_or_windows(session):
     score = calculate_document_negative_impact(session, doc.id)
 
     assert score == 1300.0
+
+
+def _create_query_with_retrieval(session, doc):
+    query_log = SearchQueryLog(query_text=f"query for {doc.title}")
+    session.add(query_log)
+    session.flush()
+    retrieval = DocumentRetrievalLog(query_log_id=query_log.id, document_id=doc.id)
+    session.add(retrieval)
+    session.commit()
+    return query_log.id
+
+
+def test_does_not_flag_document_below_threshold(session):
+    doc = Document(user_id=1, title="Below Threshold Doc")
+    session.add(doc)
+    session.commit()
+
+    qid1 = _create_query_with_retrieval(session, doc)
+    qid2 = _create_query_with_retrieval(session, doc)
+
+    create_feedback(session, qid1, is_positive=False)
+    create_feedback(session, qid2, is_positive=False)
+
+    session.refresh(doc)
+    assert doc.review_status is None
+
+
+def test_flags_document_when_negative_feedback_reaches_threshold(session):
+    doc = Document(user_id=1, title="At Threshold Doc")
+    session.add(doc)
+    session.commit()
+
+    qid1 = _create_query_with_retrieval(session, doc)
+    qid2 = _create_query_with_retrieval(session, doc)
+    qid3 = _create_query_with_retrieval(session, doc)
+
+    create_feedback(session, qid1, is_positive=False)
+    create_feedback(session, qid2, is_positive=False)
+
+    session.refresh(doc)
+    assert doc.review_status is None
+
+    create_feedback(session, qid3, is_positive=False)
+
+    session.refresh(doc)
+    assert doc.review_status == "needs_review"

@@ -64,6 +64,7 @@ def create_document_with_chunks(
     chunk_contents: Sequence[str],
     sha256: Optional[str] = None,
     status: str = "completed",
+    group_id: Optional[int] = None,
 ) -> Document:
     """Create a Document and its associated Chunk entities in the database session."""
     doc = Document(
@@ -72,6 +73,7 @@ def create_document_with_chunks(
         content=content,
         sha256=sha256,
         status=status,
+        group_id=group_id,
     )
     session.add(doc)
     session.flush()

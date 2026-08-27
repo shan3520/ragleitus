@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -31,7 +33,9 @@ def list_documents(user: dict = Depends(get_current_user), session: Session = De
 @router.post("/documents/extract")
 async def extract_document(
     file: UploadFile = File(...),
+    group_id: int | None = Form(None),
     user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db),
 ):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
@@ -41,6 +45,17 @@ async def extract_document(
         pages = extract_pdf_pages(content_bytes)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to parse PDF: {str(e)}")
+
+    chunk_contents = [page["text"] for page in pages]
+    document_service.create_document_with_chunks(
+        session=session,
+        user_id=user["username"],
+        title=Path(file.filename).stem,
+        content="\n".join(chunk_contents),
+        chunk_contents=chunk_contents,
+        group_id=group_id,
+    )
+    session.commit()
     return {"pages": pages}
 
 

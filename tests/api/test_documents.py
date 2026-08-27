@@ -56,6 +56,92 @@ def test_document_extract_unauthenticated():
     assert response.status_code == 401
 
 
+def test_upload_document_persists_group_id():
+    import uuid
+
+    import fitz
+
+    from app.db.database import get_db
+    from app.models.document import Document
+    from app.models.group import Group
+
+    client, headers = _get_authenticated_client("upload_group_user")
+
+    db_gen = get_db()
+    session = next(db_gen)
+    try:
+        group = Group(name="Upload Group")
+        session.add(group)
+        session.commit()
+        group_id = group.id
+
+        title = f"grouped_{uuid.uuid4().hex[:8]}"
+        pdf = fitz.open()
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Grouped upload content")
+        pdf_bytes = pdf.tobytes()
+        pdf.close()
+
+        response = client.post(
+            "/documents/extract",
+            files={"file": (f"{title}.pdf", pdf_bytes, "application/pdf")},
+            data={"group_id": str(group_id)},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        doc = session.query(Document).filter(
+            Document.user_id == "upload_group_user", Document.title == title
+        ).first()
+        assert doc is not None
+        assert doc.group_id == group_id
+        assert doc.group_id is not None
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+
+def test_upload_document_without_group_defaults_to_none():
+    import uuid
+
+    import fitz
+
+    from app.db.database import get_db
+    from app.models.document import Document
+
+    client, headers = _get_authenticated_client("upload_nogroup_user")
+
+    db_gen = get_db()
+    session = next(db_gen)
+    try:
+        title = f"plain_{uuid.uuid4().hex[:8]}"
+        pdf = fitz.open()
+        page = pdf.new_page()
+        page.insert_text((72, 72), "Ungrouped upload content")
+        pdf_bytes = pdf.tobytes()
+        pdf.close()
+
+        response = client.post(
+            "/documents/extract",
+            files={"file": (f"{title}.pdf", pdf_bytes, "application/pdf")},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+        doc = session.query(Document).filter(
+            Document.user_id == "upload_nogroup_user", Document.title == title
+        ).first()
+        assert doc is not None
+        assert doc.group_id is None
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+
 def test_review_document_endpoint():
     from app.services.document_service import create_document_with_chunks
     from app.db.database import get_db

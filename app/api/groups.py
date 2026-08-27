@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 from app.db.database import get_db
@@ -28,20 +28,22 @@ def list_groups(session: Session = Depends(get_db)):
 @router.post("", response_model=GroupOut, status_code=status.HTTP_201_CREATED)
 def create_group(
     group_in: GroupCreate,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db)
 ):
-    group = group_service.create_group(session, name=group_in.name)
+    group = group_service.create_group(session, name=group_in.name, background_tasks=background_tasks)
     session.commit()
     return group
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_group(
     group_id: int,
+    background_tasks: BackgroundTasks,
     hard_delete: bool = False,
     session: Session = Depends(get_db)
 ):
     from fastapi import HTTPException
-    deleted = group_service.delete_group(session, group_id, hard_delete=hard_delete)
+    deleted = group_service.delete_group(session, group_id, hard_delete=hard_delete, background_tasks=background_tasks)
     if not deleted:
         raise HTTPException(status_code=404, detail="Group not found")
     session.commit()
@@ -51,11 +53,38 @@ def delete_group(
 def update_group(
     group_id: int,
     group_in: GroupUpdate,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db)
 ):
     from fastapi import HTTPException
-    group = group_service.update_group(session, group_id, name=group_in.name)
+    group = group_service.update_group(session, group_id, name=group_in.name, background_tasks=background_tasks)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
     session.commit()
     return group
+
+@router.post("/{group_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def move_document_to_group(
+    group_id: int,
+    document_id: int,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db)
+):
+    from fastapi import HTTPException
+    document = group_service.move_document(session, document_id, target_group_id=group_id, background_tasks=background_tasks)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return None
+
+@router.delete("/{group_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_document_from_group(
+    group_id: int,
+    document_id: int,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db)
+):
+    from fastapi import HTTPException
+    document = group_service.move_document(session, document_id, target_group_id=None, background_tasks=background_tasks)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return None

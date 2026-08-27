@@ -1,12 +1,13 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.db.database import get_db
 from app.services.pdf_extraction import extract_pdf_pages
 from app.services import document_service
+from app.services.audit_service import log_audit_event
 
 router = APIRouter()
 
@@ -73,11 +74,17 @@ def get_document(document_id: int, user: dict = Depends(get_current_user), sessi
 
 
 @router.delete("/api/documents/{document_id}", status_code=204)
-def delete_document(document_id: int, user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
+def delete_document(
+    document_id: int,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db),
+):
     deleted = document_service.delete_user_document(session, document_id, user["username"])
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found")
     session.commit()
+    background_tasks.add_task(log_audit_event, action="document_deleted", document_id=document_id)
 
 
 @router.post("/api/documents/{document_id}/review")

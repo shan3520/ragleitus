@@ -11,9 +11,13 @@ class Document(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
+    filename = Column(String(255), nullable=True)
     sha256 = Column(String(64), nullable=True, index=True)
+    # Cleaned text, pages separated by a form feed (see app.services.ingestion).
     content = Column(Text, nullable=True)
+    # pending -> indexing -> ready | failed
     status = Column(String(50), nullable=False, default="pending")
+    error = Column(Text, nullable=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=True)
     last_reviewed_at = Column(DateTime, nullable=True)
@@ -31,6 +35,8 @@ class Chunk(Base):
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     content = Column(Text, nullable=False)
     sequence_order = Column(Integer, nullable=False)
+    page_number = Column(Integer, nullable=True)
+    token_count = Column(Integer, nullable=True)
 
     document = relationship("Document", back_populates="chunks")
 

@@ -72,7 +72,7 @@ def test_token_signed_with_another_secret_is_rejected(session):
     user = auth_service.register_user(session, "alice", "correct horse")
     forged = jwt.encode(
         {"sub": str(user.id), "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
-        "some-other-secret-value",
+        "some-other-secret-value-that-is-long-enough",
         algorithm="HS256",
     )
     with pytest.raises(auth_service.InvalidTokenError):

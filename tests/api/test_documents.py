@@ -330,7 +330,7 @@ def test_list_documents_query_count_does_not_scale_with_document_count():
         by_id = {item["id"]: item for item in payload_multi}
         assert set(by_id) == set(expected_impacts)
         for doc_id, item in by_id.items():
-            assert set(item) == {"id", "user_id", "title", "negative_impact"}
+            assert set(item) == {"id", "user_id", "title", "status", "negative_impact"}
             assert item["user_id"] == user_id_for(scaling_user)
             assert item["title"].startswith("scaling_doc_")
             assert item["negative_impact"] == expected_impacts[doc_id]
@@ -393,3 +393,80 @@ def test_upload_into_another_users_group_is_rejected():
         headers=other_headers,
     )
     assert response.status_code == 404
+
+
+def _pdf_bytes(*texts):
+    pdf = fitz.open()
+    for text in texts:
+        pdf.new_page().insert_text((72, 72), text)
+    data = pdf.tobytes()
+    pdf.close()
+    return data
+
+
+def test_upload_indexes_in_background_and_reports_status():
+    from app.services.vector_store import get_vector_store
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    headers, user_id = login(client, unique_username("uploader"))
+
+    resp = client.post(
+        "/api/documents",
+        files={"file": ("policy.pdf", _pdf_bytes("Leave policy: 25 days.", "Refunds: 30 days."), "application/pdf")},
+        headers=headers,
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["filename"] == "policy.pdf"
+
+    # TestClient runs background tasks before returning, so indexing has finished.
+    detail = client.get(f"/api/documents/{body['id']}", headers=headers).json()
+    assert detail["status"] == "ready"
+    assert detail["error"] is None
+    assert [(c["page_number"], c["content"]) for c in detail["chunks"]] == [
+        (1, "Leave policy: 25 days."),
+        (2, "Refunds: 30 days."),
+    ]
+    assert get_vector_store().count(user_id, body["id"]) == 2
+
+    listed = client.get("/api/documents", headers=headers).json()
+    assert [(d["id"], d["status"]) for d in listed] == [(body["id"], "ready")]
+
+
+def test_upload_accepts_markdown_and_rejects_duplicates_and_bad_types():
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    headers, _ = login(client, unique_username("uploader"))
+
+    first = client.post("/api/documents", files={"file": ("notes.md", b"# Notes\nShip Friday.", "text/markdown")}, headers=headers)
+    assert first.status_code == 202
+
+    dup = client.post("/api/documents", files={"file": ("copy.md", b"# Notes\nShip Friday.", "text/markdown")}, headers=headers)
+    assert dup.status_code == 409
+    assert dup.json()["detail"]["document_id"] == first.json()["id"]
+
+    bad = client.post("/api/documents", files={"file": ("pic.png", b"\x89PNG", "image/png")}, headers=headers)
+    assert bad.status_code == 400
+
+
+def test_reindex_and_delete_manage_vectors():
+    from app.services.vector_store import get_vector_store
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    headers, user_id = login(client, unique_username("reindexer"))
+    doc_id = client.post("/api/documents", files={"file": ("a.txt", b"Alpha. Beta.", "text/plain")}, headers=headers).json()["id"]
+
+    resp = client.post(f"/api/documents/{doc_id}/reindex", headers=headers)
+    assert resp.status_code == 202
+    assert client.get(f"/api/documents/{doc_id}", headers=headers).json()["status"] == "ready"
+    assert get_vector_store().count(user_id, doc_id) == 1
+
+    other_headers, _ = login(client, unique_username("other"))
+    assert client.post(f"/api/documents/{doc_id}/reindex", headers=other_headers).status_code == 404
+
+    assert client.delete(f"/api/documents/{doc_id}", headers=headers).status_code == 204
+    assert get_vector_store().count(user_id, doc_id) == 0

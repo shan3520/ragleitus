@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./ragforge.db"
 
     # Security
-    jwt_secret: SecretStr = Field(min_length=16)
+    # HS256 needs at least 32 bytes of key (RFC 7518 §3.2).
+    jwt_secret: SecretStr = Field(min_length=32)
     provider_key_secret: SecretStr = Field(min_length=16)
     access_token_ttl_minutes: int = 60 * 24
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
@@ -28,11 +29,13 @@ class Settings(BaseSettings):
     # Vector store: an http(s) URL for a Qdrant server, ":memory:" for an
     # in-process store, or a filesystem path for Qdrant's embedded local mode.
     vector_store_url: str = "./data/qdrant"
+    vector_store_api_key: SecretStr = SecretStr("")
 
     # Embeddings: "fastembed" runs a small local ONNX model, "fake" is a
     # deterministic hashing embedder for tests and offline development.
     embedding_backend: Literal["fastembed", "fake"] = "fastembed"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_cache_dir: str | None = None
 
     # Ingestion and retrieval
     chunk_window_size: int = 800
@@ -40,6 +43,7 @@ class Settings(BaseSettings):
     max_upload_mb: int = 25
     retrieval_top_k: int = 6
     chat_history_turns: int = 6
+    llm_max_output_tokens: int = 16000
 
     # HTTP
     rate_limit_per_minute: int = 60

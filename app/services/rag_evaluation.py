@@ -16,6 +16,7 @@ user's own provider key and is recorded in telemetry like any other call.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -128,15 +129,18 @@ def _load_answer(session: Session, user_id: int, message_id: int) -> tuple[Messa
     return message, question or ""
 
 
-async def evaluate_message(
-    session: Session,
-    user_id: int,
-    message_id: int,
-    reference: str | None = None,
-    provider: str | None = None,
-    model: str | None = None,
-    factory: ProviderFactory = create_provider,
-) -> AnswerEvaluation:
+@dataclass
+class _JudgeCall:
+    message: Message
+    judge_provider: str
+    judge_model: str
+    judge: object
+    prompt: list
+    prompt_text: str
+    context: list
+
+
+def _prepare_judge(session, user_id, message_id, reference, provider, model, factory) -> _JudgeCall:
     message, question = _load_answer(session, user_id, message_id)
     judge_provider = provider or message.provider
     if not judge_provider:
@@ -156,32 +160,34 @@ async def evaluate_message(
     context = message.context or []
     prompt = build_judge_prompt(question, context, message.content, reference)
     prompt_text = "\n\n".join(m.content for m in prompt)
-    started = time.perf_counter()
-    try:
-        result = await complete(judge, prompt, judge_model, JUDGE_MAX_TOKENS)
-    except ProviderError as exc:
-        telemetry.record_llm_call(
-            session, user_id=user_id, operation="evaluation", provider=judge_provider, model=judge_model,
-            latency_ms=(time.perf_counter() - started) * 1000, error=exc, prompt_text=prompt_text,
-            conversation_id=message.conversation_id, message_id=message.id,
-        )
-        session.commit()
-        raise JudgeError(exc.message) from None
+    return _JudgeCall(message, judge_provider, judge_model, judge, prompt, prompt_text, context)
 
+
+def _record_judge_failure(session: Session, user_id: int, call: _JudgeCall, latency_ms: float, exc: ProviderError) -> None:
     telemetry.record_llm_call(
-        session, user_id=user_id, operation="evaluation", provider=judge_provider, model=result.model or judge_model,
-        latency_ms=(time.perf_counter() - started) * 1000, usage=result.usage, prompt_text=prompt_text,
+        session, user_id=user_id, operation="evaluation", provider=call.judge_provider, model=call.judge_model,
+        latency_ms=latency_ms, error=exc, prompt_text=call.prompt_text,
+        conversation_id=call.message.conversation_id, message_id=call.message.id,
+    )
+    session.commit()
+
+
+def _store_evaluation(session: Session, user_id: int, call: _JudgeCall, result, latency_ms: float, reference: str | None) -> AnswerEvaluation:
+    message = call.message
+    telemetry.record_llm_call(
+        session, user_id=user_id, operation="evaluation", provider=call.judge_provider, model=result.model or call.judge_model,
+        latency_ms=latency_ms, usage=result.usage, prompt_text=call.prompt_text,
         completion_text=result.text, conversation_id=message.conversation_id, message_id=message.id,
     )
     session.commit()
     scores = parse_judge_output(result.text, has_reference=bool(reference))
 
-    context_text = " ".join(p.get("content", "") for p in context)
+    context_text = " ".join(p.get("content", "") for p in call.context)
     evaluation = AnswerEvaluation(
         user_id=user_id,
         message_id=message.id,
-        judge_provider=judge_provider,
-        judge_model=judge_model,
+        judge_provider=call.judge_provider,
+        judge_model=call.judge_model,
         faithfulness=scores.faithfulness,
         answer_relevancy=scores.answer_relevancy,
         context_precision=scores.context_precision,
@@ -195,6 +201,28 @@ async def evaluate_message(
     session.add(evaluation)
     session.flush()
     return evaluation
+
+
+async def evaluate_message(
+    session: Session,
+    user_id: int,
+    message_id: int,
+    reference: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    factory: ProviderFactory = create_provider,
+) -> AnswerEvaluation:
+    # Database work runs in a worker thread (one step at a time, so the session
+    # is never used concurrently); only the provider call runs on the event loop.
+    call = await asyncio.to_thread(_prepare_judge, session, user_id, message_id, reference, provider, model, factory)
+    started = time.perf_counter()
+    try:
+        result = await complete(call.judge, call.prompt, call.judge_model, JUDGE_MAX_TOKENS)
+    except ProviderError as exc:
+        await asyncio.to_thread(_record_judge_failure, session, user_id, call, (time.perf_counter() - started) * 1000, exc)
+        raise JudgeError(exc.message) from None
+    latency_ms = (time.perf_counter() - started) * 1000
+    return await asyncio.to_thread(_store_evaluation, session, user_id, call, result, latency_ms, reference)
 
 
 METRICS = ("faithfulness", "answer_relevancy", "context_precision", "context_recall", "hallucination")

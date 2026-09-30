@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 60
     rate_limit_burst: int = 20
     llm_timeout_seconds: float = 120.0
+    # Let self-hosted provider URLs point at private addresses (localhost, LAN,
+    # Docker services). Off by default: users choose these URLs, and the server
+    # calls them.
+    allow_private_provider_urls: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -470,3 +470,16 @@ def test_reindex_and_delete_manage_vectors():
 
     assert client.delete(f"/api/documents/{doc_id}", headers=headers).status_code == 204
     assert get_vector_store().count(user_id, doc_id) == 0
+
+
+def test_oversized_upload_is_refused_with_413(monkeypatch):
+    from app.services import ingestion
+    from tests.helpers import login, unique_username
+
+    monkeypatch.setattr(ingestion.settings, "max_upload_mb", 1)
+    client = TestClient(app)
+    headers, _ = login(client, unique_username("big_uploader"))
+    big = b"a " * (1024 * 1024)
+    resp = client.post("/api/documents", files={"file": ("big.txt", big, "text/plain")}, headers=headers)
+    assert resp.status_code == 413
+    assert client.get("/api/documents", headers=headers).json() == []

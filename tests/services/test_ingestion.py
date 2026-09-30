@@ -1,3 +1,6 @@
+import io
+import threading
+import time
 import fitz
 import pytest
 from qdrant_client import QdrantClient
@@ -206,3 +209,73 @@ def test_document_deleted_while_indexing_is_not_reported_as_failure(env, caplog)
     assert "Document deleted during indexing" in caplog.text
     assert not [r for r in caplog.records if r.levelname == "ERROR"]
     assert store.count(user_id, doc_id) == 0
+
+
+class _CountingStream(io.BytesIO):
+    def __init__(self, data):
+        super().__init__(data)
+        self.requested = []
+
+    def read(self, size=-1):
+        self.requested.append(size)
+        return super().read(size)
+
+
+def test_read_limited_stops_just_past_the_limit(monkeypatch):
+    monkeypatch.setattr(ingestion.settings, "max_upload_mb", 1)
+    limit = 1024 * 1024
+    assert ingestion.read_limited(io.BytesIO(b"x" * limit)) == b"x" * limit
+
+    stream = _CountingStream(b"x" * (limit * 3))
+    with pytest.raises(ingestion.FileTooLargeError):
+        ingestion.read_limited(stream)
+    # Never asked for the whole file.
+    assert stream.requested == [limit + 1]
+
+
+class _RecordingStore:
+    """Wraps a VectorStore, records which run touched it, and stalls the first run mid-index."""
+
+    def __init__(self, store):
+        self._store = store
+        self.stalled = threading.Event()
+        self.timeline: list[tuple[str, str]] = []
+
+    def delete_documents(self, user_id, document_ids):
+        self._store.delete_documents(user_id, document_ids)
+        self.timeline.append((threading.current_thread().name, "delete"))
+        if len(self.timeline) == 1:
+            self.stalled.set()
+            time.sleep(0.5)
+
+    def upsert_document(self, user_id, document_id, vectors):
+        self._store.upsert_document(user_id, document_id, vectors)
+        self.timeline.append((threading.current_thread().name, "upsert"))
+
+    def __getattr__(self, name):
+        return getattr(self._store, name)
+
+
+def test_index_runs_for_one_document_do_not_interleave(env):
+    """Two runs at once (Reindex clicked while the upload is still indexing) must not
+    interleave: on PostgreSQL that leaves duplicate chunks or orphaned vectors."""
+    factory, session, user_id, embedder, store = env
+    doc = ingestion.create_document(session, user_id, "a.txt", b"Alpha. Beta. Gamma.")
+    session.commit()
+    recording = _RecordingStore(store)
+
+    def run():
+        ingestion.index_document(doc.id, session_factory=factory, embedder=embedder, store=recording)
+
+    first = threading.Thread(target=run, name="first")
+    first.start()
+    recording.stalled.wait(5)
+    second = threading.Thread(target=run, name="second")
+    second.start()
+    first.join(10)
+    second.join(10)
+
+    assert recording.timeline == [("first", "delete"), ("first", "upsert"), ("second", "delete"), ("second", "upsert")]
+    session.expire_all()
+    assert session.get(Document, doc.id).status == "ready"
+    assert store.count(user_id, doc.id) == session.query(Chunk).filter(Chunk.document_id == doc.id).count()

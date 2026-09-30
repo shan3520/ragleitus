@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import BinaryIO, Callable
 
 from sqlalchemy.orm import Session
 
@@ -61,6 +62,15 @@ class DuplicateDocumentError(IngestionError):
 class ExtractedPage:
     number: int
     text: str
+
+
+def read_limited(stream: BinaryIO) -> bytes:
+    """Read an upload, stopping one byte past the size limit instead of reading it all into memory."""
+    limit = settings.max_upload_mb * 1024 * 1024
+    content = stream.read(limit + 1)
+    if len(content) > limit:
+        raise FileTooLargeError(f"File is larger than {settings.max_upload_mb} MB")
+    return content
 
 
 def extract_pages(filename: str, content: bytes) -> list[ExtractedPage]:
@@ -145,6 +155,20 @@ def _build_chunks(document: Document) -> list[Chunk]:
     return chunks
 
 
+# One lock per document: a second run for the same document (Reindex clicked
+# while the upload is still indexing) waits for the first, instead of both
+# replacing the chunks at once and leaving duplicates or orphaned vectors.
+# Indexing runs in this process, so a process-local lock covers it; a
+# multi-process task queue would need a database lock instead.
+_index_locks: dict[int, threading.Lock] = {}
+_index_locks_guard = threading.Lock()
+
+
+def _document_lock(document_id: int) -> threading.Lock:
+    with _index_locks_guard:
+        return _index_locks.setdefault(document_id, threading.Lock())
+
+
 def index_document(
     document_id: int,
     session_factory: Callable[[], Session] = SessionLocal,
@@ -156,6 +180,16 @@ def index_document(
     Never raises: failures are recorded on the document as status "failed"
     with the error, because this usually runs after the response is sent.
     """
+    with _document_lock(document_id):
+        _index_document(document_id, session_factory, embedder, store)
+
+
+def _index_document(
+    document_id: int,
+    session_factory: Callable[[], Session],
+    embedder: Embedder | None,
+    store: VectorStore | None,
+) -> None:
     embedder = embedder or get_embedder()
     store = store or get_vector_store()
     session = session_factory()

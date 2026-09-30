@@ -64,6 +64,8 @@ def change_password(session: Session, user: User, current_password: str, new_pas
     if not verify_password(user.password_hash, current_password):
         raise InvalidCredentialsError()
     user.password_hash = hash_password(new_password)
+    # Sign out every existing session, e.g. one using a stolen token.
+    user.token_version = (user.token_version or 0) + 1
     session.flush()
 
 
@@ -71,6 +73,7 @@ def create_access_token(user: User, now: datetime | None = None) -> str:
     issued_at = now or datetime.now(timezone.utc)
     payload = {
         "sub": str(user.id),
+        "ver": user.token_version or 0,
         "iat": issued_at,
         "exp": issued_at + timedelta(minutes=settings.access_token_ttl_minutes),
     }
@@ -92,4 +95,6 @@ def get_user_from_token(session: Session, token: str) -> User:
     user = session.get(User, user_id)
     if user is None:
         raise InvalidTokenError("user not found")
+    if payload.get("ver", 0) != (user.token_version or 0):
+        raise InvalidTokenError("token was issued before the last password change")
     return user

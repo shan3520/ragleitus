@@ -4,7 +4,7 @@ such as Ollama, LM Studio or vLLM)."""
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+from typing import AsyncIterator, Awaitable, Callable
 
 import httpx
 
@@ -21,12 +21,21 @@ class OpenAICompatibleProvider:
         *,
         stream_usage_option: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
+        url_guard: Callable[[str], Awaitable[None]] | None = None,
+        expose_error_body: bool = True,
     ):
         self.name = name
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._stream_usage_option = stream_usage_option
         self._transport = transport
+        # For user-supplied URLs: checked before every request (see url_guard.py).
+        self._url_guard = url_guard
+        self._expose_error_body = expose_error_body
+
+    async def _check_url(self) -> None:
+        if self._url_guard is not None:
+            await self._url_guard(self._base_url)
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -48,12 +57,13 @@ class OpenAICompatibleProvider:
         usage = Usage()
         served_model = None
         finish_reason = None
+        await self._check_url()
         try:
             async with make_client(self._transport) as client:
                 async with client.stream(
                     "POST", f"{self._base_url}/chat/completions", headers=self._headers(), json=body
                 ) as response:
-                    await raise_for_status(response, self.name)
+                    await raise_for_status(response, self.name, include_body=self._expose_error_body)
                     async for chunk in iter_sse_json(response):
                         if "error" in chunk:
                             error = chunk["error"]
@@ -77,10 +87,11 @@ class OpenAICompatibleProvider:
         yield StreamEvent(kind="done", usage=usage, model=served_model, finish_reason=finish_reason)
 
     async def list_models(self) -> list[str]:
+        await self._check_url()
         try:
             async with make_client(self._transport) as client:
                 response = await client.get(f"{self._base_url}/models", headers=self._headers())
-                await raise_for_status(response, self.name)
+                await raise_for_status(response, self.name, include_body=self._expose_error_body)
                 payload = response.json()
         except httpx.HTTPError as exc:
             raise transport_error(self.name, exc) from None

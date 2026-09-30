@@ -149,3 +149,17 @@ def test_flags_document_when_negative_feedback_reaches_threshold(session):
 
     session.refresh(doc)
     assert doc.review_status == "needs_review"
+
+
+def test_feedback_on_a_missing_or_foreign_search_log_is_refused(session):
+    from app.services.feedback_service import SearchLogNotFoundError
+
+    with pytest.raises(SearchLogNotFoundError):
+        create_feedback(session, search_log_id=999, is_positive=True, user_id=1)
+
+    log = SearchQueryLog(query_text="whose query?", user_id=2)
+    session.add(log)
+    session.commit()
+    with pytest.raises(SearchLogNotFoundError):
+        create_feedback(session, search_log_id=log.id, is_positive=False, user_id=1)
+    assert create_feedback(session, search_log_id=log.id, is_positive=True, user_id=2).search_log_id == log.id

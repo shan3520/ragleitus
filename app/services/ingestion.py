@@ -185,13 +185,22 @@ def index_document(
             document.status = "ready"
             session.commit()
         except Exception as exc:
-            logger.exception("Indexing failed", extra={"document_id": document_id})
             session.rollback()
+            # Vectors may have been written before the failure; the chunk rows
+            # they point to were rolled back, so remove them.
+            try:
+                store.delete_documents(user_id, [document_id])
+            except Exception:
+                logger.exception("Could not clean up vectors after failed indexing", extra={"document_id": document_id})
             document = session.get(Document, document_id)
-            if document is not None:
-                document.status = "failed"
-                document.error = f"{type(exc).__name__}: {exc}"[:1000]
-                session.commit()
+            if document is None:
+                # Deleted while it was being indexed: nothing left to report on.
+                logger.info("Document deleted during indexing", extra={"document_id": document_id})
+                return
+            logger.exception("Indexing failed", extra={"document_id": document_id})
+            document.status = "failed"
+            document.error = f"{type(exc).__name__}: {exc}"[:1000]
+            session.commit()
     finally:
         session.close()
 

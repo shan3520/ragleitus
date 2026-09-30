@@ -1,7 +1,7 @@
 import fitz
 import pytest
 from qdrant_client import QdrantClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.models import Base
@@ -26,6 +26,9 @@ def _pdf(*page_texts: str) -> bytes:
 @pytest.fixture
 def env(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'ingest.db'}")
+    # Enforce foreign keys like the app's engine and PostgreSQL do: chunk
+    # rows are removed by ON DELETE CASCADE when their document goes.
+    event.listen(engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     embedder = FakeEmbedder()
@@ -148,3 +151,58 @@ def test_delete_document_removes_vectors(env):
     session.commit()
     assert store.count(user_id, doc.id) == 0
     assert session.query(Chunk).filter(Chunk.document_id == doc.id).count() == 0
+
+
+def test_failure_after_vectors_were_written_removes_them(env):
+    factory, session, user_id, embedder, store = env
+    doc = ingestion.create_document(session, user_id, "a.txt", b"Some text.")
+    session.commit()
+
+    class StoreThatWritesThenFails:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def delete_documents(self, *args):
+            return self.inner.delete_documents(*args)
+
+        def upsert_document(self, *args):
+            self.inner.upsert_document(*args)
+            raise RuntimeError("connection dropped after write")
+
+    ingestion.index_document(doc.id, session_factory=factory, embedder=embedder, store=StoreThatWritesThenFails(store))
+    session.expire_all()
+    assert session.get(Document, doc.id).status == "failed"
+    assert store.count(user_id, doc.id) == 0
+
+
+def test_document_deleted_while_indexing_is_not_reported_as_failure(env, caplog):
+    factory, session, user_id, embedder, store = env
+    doc = ingestion.create_document(session, user_id, "a.txt", b"Some text.")
+    session.commit()
+    doc_id = doc.id
+
+    class StoreRacingADelete:
+        """Upsert fails (as the chunks' document row disappears) and the delete
+        request commits before the indexer looks the document up again."""
+
+        def __init__(self, inner):
+            self.inner = inner
+            self.deletes = 0
+
+        def upsert_document(self, *args):
+            raise RuntimeError("document vanished")
+
+        def delete_documents(self, *args):
+            self.deletes += 1
+            if self.deletes == 2:  # the cleanup after rollback
+                other = factory()
+                other.delete(other.get(Document, doc_id))
+                other.commit()
+                other.close()
+            return self.inner.delete_documents(*args)
+
+    with caplog.at_level("INFO"):
+        ingestion.index_document(doc_id, session_factory=factory, embedder=embedder, store=StoreRacingADelete(store))
+    assert "Document deleted during indexing" in caplog.text
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+    assert store.count(user_id, doc_id) == 0

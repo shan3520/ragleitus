@@ -44,3 +44,47 @@ def test_upsert_with_same_chunk_ids_does_not_duplicate():
     store.upsert_document(1, 10, [ChunkVector(100, 1, vector)])
     store.upsert_document(1, 10, [ChunkVector(100, 1, vector)])
     assert store.count(1, 10) == 1
+
+
+def test_collection_created_concurrently_elsewhere_is_not_an_error():
+    client = QdrantClient(location=":memory:")
+    store = VectorStore(client, "fake-hash", 256)
+    other_process = VectorStore(client, "fake-hash", 256)
+
+    # Simulate the race: this store checks, finds nothing, then another
+    # process creates the collection before this store's create call lands.
+    real_exists = client.collection_exists
+    calls = []
+
+    def exists_then_race(name):
+        calls.append(name)
+        if len(calls) == 1:
+            other_process.ensure_collection()
+            return False
+        return real_exists(name)
+
+    client.collection_exists = exists_then_race
+    store.ensure_collection()
+    assert store.count(1) == 0
+
+
+def test_concurrent_indexing_threads_share_one_collection():
+    import threading
+
+    store = _store()
+    vector = FakeEmbedder().embed_query("x")
+    errors = []
+
+    def index(doc_id):
+        try:
+            store.upsert_document(1, doc_id, [ChunkVector(doc_id * 10, None, vector)])
+        except Exception as exc:  # pragma: no cover - the assertion reports it
+            errors.append(exc)
+
+    threads = [threading.Thread(target=index, args=(i,)) for i in range(1, 9)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert store.count(1) == 8

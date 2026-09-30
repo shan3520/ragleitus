@@ -12,6 +12,7 @@ Qdrant's embedded mode.
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -47,19 +48,30 @@ class VectorStore:
         slug = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip("_")
         self.collection = f"chunks_{slug}_{dimension}"
         self._ready = False
+        self._lock = threading.Lock()
 
     def ensure_collection(self) -> None:
         if self._ready:
             return
-        if not self.client.collection_exists(self.collection):
-            self.client.create_collection(
-                self.collection,
-                vectors_config=models.VectorParams(size=self.dimension, distance=models.Distance.COSINE),
-            )
-            # Only a Qdrant server uses payload indexes; embedded mode ignores them.
-            for field in ("user_id", "document_id") if self._payload_indexes else ():
-                self.client.create_payload_index(self.collection, field, models.PayloadSchemaType.INTEGER)
-        self._ready = True
+        # Background indexing tasks run concurrently, and another process may
+        # create the collection at the same moment: serialise creation here and
+        # treat "already exists" as success.
+        with self._lock:
+            if self._ready:
+                return
+            if not self.client.collection_exists(self.collection):
+                try:
+                    self.client.create_collection(
+                        self.collection,
+                        vectors_config=models.VectorParams(size=self.dimension, distance=models.Distance.COSINE),
+                    )
+                except Exception:
+                    if not self.client.collection_exists(self.collection):
+                        raise
+                # Only a Qdrant server uses payload indexes; embedded mode ignores them.
+                for field in ("user_id", "document_id") if self._payload_indexes else ():
+                    self.client.create_payload_index(self.collection, field, models.PayloadSchemaType.INTEGER)
+            self._ready = True
 
     def upsert_document(self, user_id: int, document_id: int, chunks: list[ChunkVector]) -> None:
         self.ensure_collection()

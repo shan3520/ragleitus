@@ -24,7 +24,10 @@ class Document(Base):
     review_status = Column(String(50), nullable=True)
 
     group = relationship("Group", back_populates="documents")
-    chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
+    # passive_deletes: the database removes chunks via ON DELETE CASCADE, so
+    # deleting a document never works from a stale list of chunks (a re-index
+    # may be replacing them at the same moment).
+    chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan", passive_deletes=True)
     feedbacks = relationship("SearchFeedback", secondary="document_feedback", back_populates="documents", cascade="all, delete")
 
 

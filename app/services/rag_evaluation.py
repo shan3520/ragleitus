@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.answer_evaluation import AnswerEvaluation
 from app.models.conversation import Conversation, Message
@@ -207,5 +207,11 @@ def list_evaluations(session: Session, user_id: int, limit: int = 50, offset: in
     total = query.count()
     averages_row = query.with_entities(*[func.avg(getattr(AnswerEvaluation, m)) for m in METRICS]).one()
     averages = {m: (round(v, 4) if v is not None else None) for m, v in zip(METRICS, averages_row)}
-    items = query.order_by(AnswerEvaluation.created_at.desc(), AnswerEvaluation.id.desc()).offset(offset).limit(limit).all()
+    items = (
+        query.options(selectinload(AnswerEvaluation.message))  # conversation_id without a query per row
+        .order_by(AnswerEvaluation.created_at.desc(), AnswerEvaluation.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     return items, total, averages

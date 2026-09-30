@@ -73,3 +73,15 @@ describe("request", () => {
     await expect(api.documents()).rejects.toMatchObject({ status: 0, message: "Could not reach the server." });
   });
 });
+
+describe("api.health", () => {
+  it("returns the per-subsystem report even when the API answers 503", async () => {
+    mockFetch(503, { db: "healthy", vector_store: "unavailable" });
+    await expect(api.health()).resolves.toEqual({ db: "healthy", vector_store: "unavailable" });
+  });
+
+  it("still rejects when the API itself is unreachable", async () => {
+    mockFetch(502, { detail: "The RAGForge API is not reachable." });
+    await expect(api.health()).rejects.toMatchObject({ status: 502 });
+  });
+});

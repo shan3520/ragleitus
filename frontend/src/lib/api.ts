@@ -167,6 +167,7 @@ export interface TelemetryEvent {
 export interface Evaluation {
   id: number;
   message_id: number;
+  conversation_id: number | null;
   judge_provider: string;
   judge_model: string;
   faithfulness: number;
@@ -228,6 +229,8 @@ export class ApiError extends Error {
     public status: number,
     message: string,
     public detail?: unknown,
+    /** The parsed response body, when there was one. */
+    public body?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -285,7 +288,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     } catch {
       /* not JSON */
     }
-    throw new ApiError(response.status, errorMessage(response.status, body), (body as { detail?: unknown })?.detail);
+    throw new ApiError(response.status, errorMessage(response.status, body), (body as { detail?: unknown })?.detail, body);
   }
   if (response.status === 204) return undefined as T;
   const text = await response.text();
@@ -342,5 +345,10 @@ export const api = {
     return request<EvaluationHistory>(`/api/evaluations${qs ? `?${qs}` : ""}`);
   },
 
-  health: () => request<SubsystemHealth>("/api/health/subsystems"),
+  /** Resolves on 503 too: that status still carries which subsystem is down. */
+  health: () =>
+    request<SubsystemHealth>("/api/health/subsystems").catch((e: unknown) => {
+      if (e instanceof ApiError && e.status === 503 && e.body) return e.body as SubsystemHealth;
+      throw e;
+    }),
 };

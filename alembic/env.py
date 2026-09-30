@@ -17,14 +17,15 @@ config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
 
-# Import the application's Base metadata and models to populate target_metadata
-# Base is exposed from app.db.database (which delegates to app.models)
-try:
-    from app.db.database import Base
-    import app.models  # noqa: F401 (ensure models are imported)
-except Exception:
-    # If import fails, let the error surface when Alembic runs; keeping silent may hide problems
-    raise
+# Import the application's models to populate target_metadata.
+from app.models import Base  # noqa: E402
+
+# An explicit sqlalchemy.url (set by tests or on the command line) wins;
+# otherwise use the application's configured database.
+if not config.get_main_option("sqlalchemy.url"):
+    from app.core.config import settings
+
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

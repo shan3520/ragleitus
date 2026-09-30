@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.middleware import RequestIDMiddleware, RateLimitMiddleware
-from app.db.database import Base, engine
 from app.api.health import router as health_router
 from app.api.provider_keys import router as provider_keys_router
 from app.api.auth import router as auth_router
@@ -32,8 +31,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage application startup and shutdown lifecycle."""
-    Base.metadata.create_all(bind=engine)
+    """Manage application startup and shutdown lifecycle.
+
+    The schema is managed by Alembic; run `alembic upgrade head` before
+    starting the application.
+    """
     logger.info(
         "Application starting",
         extra={"version": settings.VERSION, "project": settings.PROJECT_NAME},
@@ -53,10 +55,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS — allow the frontend origin in production, everything in dev
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if settings.debug else ["http://localhost:3000"],
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -11,3 +11,8 @@ build/
 *.db
 .pytest_cache/
 .ruff_cache/
+
+# Local data and tool scratch output
+data/
+%TEMP%/
+*.egg-info/

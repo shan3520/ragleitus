@@ -193,14 +193,19 @@ def test_clustered_unanswered_queries():
         db.add(UnmatchedSearch(query_text="apples", timestamp=datetime.datetime(2023, 1, 5, 12, 0, 0)))
         db.commit()
 
+        from app.models.document import Document
+        resolving_doc = Document(title="Password reset guide")
+        db.add(resolving_doc)
+        db.flush()
+
         # Mark "apple" cluster as handled
         apple_search = db.query(UnmatchedSearch).filter(UnmatchedSearch.query_text == "apple").first()
-        handled_cluster = QueryCluster(id=apple_search.id, status="handled", resolved_by_document_id=1, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
+        handled_cluster = QueryCluster(id=apple_search.id, status="handled", resolved_by_document_id=resolving_doc.id, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
         db.add(handled_cluster)
         
         # Add a "regression" cluster
         regression_search = db.query(UnmatchedSearch).filter(UnmatchedSearch.query_text == "apples").first()
-        regression_cluster = QueryCluster(id=regression_search.id, status="regression", resolved_by_document_id=1, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
+        regression_cluster = QueryCluster(id=regression_search.id, status="regression", resolved_by_document_id=resolving_doc.id, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
         db.add(regression_cluster)
         db.commit()
     finally:

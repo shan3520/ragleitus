@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { ArrowLeft } from "lucide-react";
 
 import { Page, PageHeader } from "@/components/app-shell";
@@ -13,6 +13,23 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import { formatDate } from "@/lib/utils";
+
+// The URL hash, kept current. CSS :target is not enough here: it does not update
+// when the app navigates client-side (pushState), which is how citations arrive.
+function subscribeToHash(onChange: () => void) {
+  window.addEventListener("hashchange", onChange);
+  window.addEventListener("popstate", onChange);
+  return () => {
+    window.removeEventListener("hashchange", onChange);
+    window.removeEventListener("popstate", onChange);
+  };
+}
+const useHash = () =>
+  useSyncExternalStore(
+    subscribeToHash,
+    () => window.location.hash,
+    () => "",
+  );
 
 export default function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -27,12 +44,12 @@ export default function DocumentDetailPage() {
     return () => window.clearInterval(timer);
   }, [status, reload]);
 
-  // Citations link here as #chunk-<id>; scroll there once the chunks exist.
+  // Citations link here as #chunk-<id>; highlight that passage and scroll to it once it exists.
+  const cited = useHash().slice(1);
   const chunkCount = doc.data?.chunks.length ?? 0;
   useEffect(() => {
-    if (!chunkCount || !window.location.hash) return;
-    document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ block: "center" });
-  }, [chunkCount]);
+    if (chunkCount && cited) document.getElementById(cited)?.scrollIntoView({ block: "center" });
+  }, [chunkCount, cited]);
 
   return (
     <Page>
@@ -60,7 +77,8 @@ export default function DocumentDetailPage() {
                 <section
                   key={chunk.id}
                   id={`chunk-${chunk.id}`}
-                  className="scroll-mt-24 rounded-lg border p-3 target:border-primary target:bg-primary/5 target:ring-2 target:ring-primary/30"
+                  aria-current={cited === `chunk-${chunk.id}` ? "location" : undefined}
+                  className="scroll-mt-24 rounded-lg border p-3 aria-[current=location]:border-primary aria-[current=location]:bg-primary/5 aria-[current=location]:ring-2 aria-[current=location]:ring-primary/30"
                 >
                   <p className="mb-1 text-xs text-muted-foreground">
                     Passage {chunk.sequence_order}

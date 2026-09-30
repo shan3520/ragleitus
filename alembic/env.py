@@ -38,6 +38,22 @@ def run_migrations_offline():
         context.run_migrations()
 
 
+def _widen_version_table(connection):
+    """Some revision ids here are longer than the VARCHAR(32) Alembic gives
+    alembic_version.version_num by default. SQLite ignores the length;
+    PostgreSQL rejects the update. Create or widen the column before
+    migrating (this also unsticks a database that stopped at 0012)."""
+    if connection.dialect.name != "postgresql":
+        return
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS alembic_version ("
+        "version_num VARCHAR(255) NOT NULL, "
+        "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+    )
+    connection.exec_driver_sql("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)")
+    connection.commit()
+
+
 def run_migrations_online():
     connectable = engine_from_config(
         config.get_section(config.config_ini_section),
@@ -46,6 +62,7 @@ def run_migrations_online():
     )
 
     with connectable.connect() as connection:
+        _widen_version_table(connection)
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
 
         with context.begin_transaction():

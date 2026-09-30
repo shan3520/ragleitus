@@ -18,7 +18,7 @@ def session():
     db.close()
 
 def test_search_logs_saved_on_match(session):
-    doc1 = Document(title="Test Doc 1", content="This is a test document.", status="ready")
+    doc1 = Document(user_id=1, title="Test Doc 1", content="This is a test document.", status="ready")
     session.add(doc1)
     session.commit()
 
@@ -49,7 +49,7 @@ def test_search_logs_saved_on_match(session):
     assert retrievals[0].document_id == doc1.id
 
 def test_search_logs_saved_on_unmatched(session):
-    doc1 = Document(title="Test Doc 1", content="This is a test document.", status="ready")
+    doc1 = Document(user_id=1, title="Test Doc 1", content="This is a test document.", status="ready")
     session.add(doc1)
     session.commit()
 

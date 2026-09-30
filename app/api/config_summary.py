@@ -1,8 +1,9 @@
 '''Config summary endpoint.'''
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from app.api.deps import get_current_user
 from app.core.config import settings
 
-router = APIRouter(tags=["config"])
+router = APIRouter(tags=["config"], dependencies=[Depends(get_current_user)])
 
 @router.get("/api/config/summary")
 def config_summary():

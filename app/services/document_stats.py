@@ -71,7 +71,7 @@ def calculate_document_disappointment_ratio(db, document_id: int, days: int = 30
     return neg_feedbacks / retrievals
 
 
-def get_unsearched_documents(session, days: int):
+def get_unsearched_documents(session, days: int, user_id: int | None = None):
     """
     Return documents created before the cutoff that were not retrieved
     in any search within the last ``days`` days.
@@ -82,11 +82,10 @@ def get_unsearched_documents(session, days: int):
     """
     cutoff_date = datetime.utcnow() - timedelta(days=days)
 
-    recent_search_count = (
-        session.query(func.count(SearchQueryLog.id))
-        .filter(SearchQueryLog.timestamp >= cutoff_date)
-        .scalar()
-    )
+    recent_searches = session.query(func.count(SearchQueryLog.id)).filter(SearchQueryLog.timestamp >= cutoff_date)
+    if user_id is not None:
+        recent_searches = recent_searches.filter(SearchQueryLog.user_id == user_id)
+    recent_search_count = recent_searches.scalar()
     if not recent_search_count:
         raise NoSearchActivityError(
             f"No search activity in the last {days} days; "
@@ -100,15 +99,13 @@ def get_unsearched_documents(session, days: int):
         .subquery()
     )
 
-    return (
-        session.query(Document)
-        .filter(
-            Document.created_at < cutoff_date,
-            ~Document.id.in_(recently_retrieved_ids.select()),
-        )
-        .order_by(Document.created_at.desc())
-        .all()
+    documents = session.query(Document).filter(
+        Document.created_at < cutoff_date,
+        ~Document.id.in_(recently_retrieved_ids.select()),
     )
+    if user_id is not None:
+        documents = documents.filter(Document.user_id == user_id)
+    return documents.order_by(Document.created_at.desc()).all()
 
 
 def get_underperforming_document_ids(

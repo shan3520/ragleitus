@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from app.api.deps import get_current_user
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.services.chunking import chunk_text
 
-router = APIRouter(tags=["chunking"])
+router = APIRouter(tags=["chunking"], dependencies=[Depends(get_current_user)])
 
 
 class ChunkRequest(BaseModel):

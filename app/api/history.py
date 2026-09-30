@@ -6,7 +6,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.api.auth import get_current_user
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.services.audit_service import get_audit_logs
 
 router = APIRouter(prefix="/api/history", tags=["history"])
@@ -32,7 +33,7 @@ def get_history(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     logs, total = get_audit_logs(
         session,
@@ -41,5 +42,6 @@ def get_history(
         action_type=action_type,
         limit=limit,
         offset=offset,
+        user_id=user.id,
     )
     return {"items": logs, "total": total}

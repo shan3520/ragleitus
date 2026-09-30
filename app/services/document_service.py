@@ -13,7 +13,7 @@ from app.models.document import Document, Chunk
 from app.models.feedback import SearchFeedback
 
 
-def list_user_documents(session: Session, user_id: str) -> list[Document]:
+def list_user_documents(session: Session, user_id: int) -> list[Document]:
     """List all documents owned by a specific user.
 
     Each document is fetched together with its aggregated statistics (the
@@ -41,12 +41,12 @@ def list_user_documents(session: Session, user_id: str) -> list[Document]:
     return documents
 
 
-def get_user_document(session: Session, document_id: int, user_id: str) -> Optional[Document]:
+def get_user_document(session: Session, document_id: int, user_id: int) -> Optional[Document]:
     """Retrieve a single document owned by a user by ID."""
     return session.query(Document).filter_by(id=document_id, user_id=user_id).first()
 
 
-def delete_user_document(session: Session, document_id: int, user_id: str) -> bool:
+def delete_user_document(session: Session, document_id: int, user_id: int) -> bool:
     """Delete a document owned by a user."""
     doc = get_user_document(session, document_id, user_id)
     if doc:
@@ -58,7 +58,7 @@ def delete_user_document(session: Session, document_id: int, user_id: str) -> bo
 
 def create_document_with_chunks(
     session: Session,
-    user_id: str,
+    user_id: int,
     title: str,
     content: str,
     chunk_contents: Sequence[str],
@@ -92,9 +92,9 @@ def create_document_with_chunks(
 
 from app.services.staleness_scoring import invalidate_staleness_cache
 
-def mark_document_reviewed(db: Session, user: dict, document_id: int) -> Optional[Document]:
+def mark_document_reviewed(db: Session, user_id: int, document_id: int) -> Optional[Document]:
     """Mark a document as reviewed by updating the last_reviewed_at timestamp."""
-    doc = get_user_document(db, document_id, user["username"])
+    doc = get_user_document(db, document_id, user_id)
     if doc:
         doc.last_reviewed_at = datetime.now(timezone.utc)
         db.commit()

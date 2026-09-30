@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.models.document import UnmatchedSearch
 from app.services.jaccard_scoring import score_jaccard
 
-def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end: Optional[datetime] = None, threshold: float = 0.5, status: str = "open,regression") -> List[dict]:
+def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end: Optional[datetime] = None, threshold: float = 0.5, status: str = "open,regression", user_id: Optional[int] = None) -> List[dict]:
     """
     Fetches UnmatchedSearch records within a timeframe, groups them by similarity,
     extracts a canonical query for each cluster, and counts occurrences.
@@ -16,6 +16,8 @@ def cluster_unmatched_queries(db: Session, start: Optional[datetime] = None, end
         QueryCluster, UnmatchedSearch.id == QueryCluster.id
     )
     
+    if user_id is not None:
+        query = query.filter(UnmatchedSearch.user_id == user_id)
     if start:
         query = query.filter(UnmatchedSearch.timestamp >= start)
     if end:

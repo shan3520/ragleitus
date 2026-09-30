@@ -3,10 +3,11 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.api.auth import get_current_user
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.db.database import get_db
 from app.services.pdf_extraction import extract_pdf_pages
-from app.services import document_service
+from app.services import document_service, group_service
 from app.services.audit_service import log_audit_event
 
 router = APIRouter()
@@ -16,8 +17,8 @@ get_db_session = get_db
 
 
 @router.get("/api/documents")
-def list_documents(user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
-    documents = document_service.list_user_documents(session, user["username"])
+def list_documents(user: User = Depends(get_current_user), session: Session = Depends(get_db)):
+    documents = document_service.list_user_documents(session, user.id)
     items = [
         {
             "id": document.id,
@@ -35,11 +36,14 @@ def list_documents(user: dict = Depends(get_current_user), session: Session = De
 async def extract_document(
     file: UploadFile = File(...),
     group_id: int | None = Form(None),
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
+
+    if group_id is not None and group_service.get_user_group(session, user.id, group_id) is None:
+        raise HTTPException(status_code=404, detail="Group not found")
 
     content_bytes = await file.read()
     try:
@@ -50,7 +54,7 @@ async def extract_document(
     chunk_contents = [page["text"] for page in pages]
     document_service.create_document_with_chunks(
         session=session,
-        user_id=user["username"],
+        user_id=user.id,
         title=Path(file.filename).stem,
         content="\n".join(chunk_contents),
         chunk_contents=chunk_contents,
@@ -61,8 +65,8 @@ async def extract_document(
 
 
 @router.get("/api/documents/{document_id}")
-def get_document(document_id: int, user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
-    document = document_service.get_user_document(session, document_id, user["username"])
+def get_document(document_id: int, user: User = Depends(get_current_user), session: Session = Depends(get_db)):
+    document = document_service.get_user_document(session, document_id, user.id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     return {
@@ -77,19 +81,19 @@ def get_document(document_id: int, user: dict = Depends(get_current_user), sessi
 def delete_document(
     document_id: int,
     background_tasks: BackgroundTasks,
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
-    deleted = document_service.delete_user_document(session, document_id, user["username"])
+    deleted = document_service.delete_user_document(session, document_id, user.id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found")
     session.commit()
-    background_tasks.add_task(log_audit_event, action="document_deleted", document_id=document_id)
+    background_tasks.add_task(log_audit_event, action="document_deleted", user_id=user.id, document_id=document_id)
 
 
 @router.post("/api/documents/{document_id}/review")
-def review_document(document_id: int, user: dict = Depends(get_current_user), session: Session = Depends(get_db)):
-    doc = document_service.mark_document_reviewed(session, user, document_id)
+def review_document(document_id: int, user: User = Depends(get_current_user), session: Session = Depends(get_db)):
+    doc = document_service.mark_document_reviewed(session, user.id, document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"id": doc.id, "last_reviewed_at": doc.last_reviewed_at}

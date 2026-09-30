@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from app.db.database import get_db
 from app.models.document import UnmatchedSearch
 from app.models.query_cluster import QueryCluster
-from app.api.auth import get_current_user
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.services.query_similarity import compute_query_similarity_matrix
 import logging
 
@@ -23,14 +24,14 @@ def get_recent_queries(
     limit: int = Query(10, ge=1, le=100),
     status: str = Query("open"),
     session: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """
     Get recent unanswered queries, paginated.
     """
     query = session.query(UnmatchedSearch, QueryCluster).outerjoin(
         QueryCluster, UnmatchedSearch.id == QueryCluster.id
-    )
+    ).filter(UnmatchedSearch.user_id == user.id)
     if status == "open":
         query = query.filter(or_(QueryCluster.status == None, QueryCluster.status == "open"))
     elif status:
@@ -71,7 +72,7 @@ def get_frequent_queries(
     days: int = Query(30),
     status: str = Query("open"),
     session: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """
     Get the most frequent unanswered queries within the last `days` days.
@@ -83,7 +84,7 @@ def get_frequent_queries(
         func.count(UnmatchedSearch.id).label("count")
     ).outerjoin(QueryCluster, UnmatchedSearch.id == QueryCluster.id)
 
-    query = query.filter(UnmatchedSearch.timestamp >= cutoff)
+    query = query.filter(UnmatchedSearch.timestamp >= cutoff, UnmatchedSearch.user_id == user.id)
 
     if status == "open":
         query = query.filter(or_(QueryCluster.status == None, QueryCluster.status == "open"))
@@ -139,7 +140,7 @@ def get_clustered_queries(
     threshold: float = Query(0.5, ge=0.0, le=1.0),
     status: str = Query("open,regression"),
     session: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """
     Get unmatched queries clustered by similarity.
@@ -154,7 +155,7 @@ def get_clustered_queries(
         
     from app.services.query_clustering import cluster_unmatched_queries
     
-    clusters = cluster_unmatched_queries(session, start_dt, end_dt, threshold, status)
+    clusters = cluster_unmatched_queries(session, start_dt, end_dt, threshold, status, user_id=user.id)
     
     timeframe = Timeframe(start=start, end=end)
     
@@ -179,21 +180,23 @@ def mark_cluster(
     cluster_id: int,
     payload: MarkClusterHandledRequest,
     session: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     from app.services.document_service import get_user_document
     from fastapi import HTTPException
     
-    doc = get_user_document(session, payload.document_id, user["username"])
+    doc = get_user_document(session, payload.document_id, user.id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
         
     from app.services.query_clustering import mark_cluster_handled, cluster_unmatched_queries
     
     # Run clustering to determine the max timestamp for this cluster
-    clusters = cluster_unmatched_queries(session, status=None)
+    clusters = cluster_unmatched_queries(session, status=None, user_id=user.id)
     target_cluster = next((c for c in clusters if c["id"] == cluster_id), None)
-    last_ts = target_cluster.get("last_query_timestamp") if target_cluster else None
+    if target_cluster is None:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    last_ts = target_cluster.get("last_query_timestamp")
 
     cluster = mark_cluster_handled(session, cluster_id, payload.document_id, last_ts)
     if not cluster:

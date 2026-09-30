@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.auth import get_current_user
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.db.database import get_db
 from app.models.evaluation import Experiment
 from app.services.evaluation_scoring import compare_experiments
@@ -11,7 +12,7 @@ router = APIRouter(tags=["evaluations"])
 
 @router.get("/api/evaluations/summary")
 def get_evaluation_summary(
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
     """

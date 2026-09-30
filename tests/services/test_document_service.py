@@ -26,7 +26,7 @@ def test_document_service_crud_flow():
     # Create document
     doc = create_document_with_chunks(
         session=session,
-        user_id="user1",
+        user_id=1,
         title="Test PDF Document",
         content="Full text content",
         chunk_contents=["Chunk 1 content", "Chunk 2 content"],
@@ -35,34 +35,34 @@ def test_document_service_crud_flow():
     session.commit()
 
     assert doc.id is not None
-    assert doc.user_id == "user1"
+    assert doc.user_id == 1
     assert doc.title == "Test PDF Document"
     assert len(doc.chunks) == 2
     assert doc.chunks[0].sequence_order == 1
 
     # List documents
-    user1_docs = list_user_documents(session, "user1")
+    user1_docs = list_user_documents(session, 1)
     assert len(user1_docs) == 1
     assert user1_docs[0].id == doc.id
 
-    user2_docs = list_user_documents(session, "user2")
+    user2_docs = list_user_documents(session, 2)
     assert len(user2_docs) == 0
 
     # Get document
-    retrieved = get_user_document(session, doc.id, "user1")
+    retrieved = get_user_document(session, doc.id, 1)
     assert retrieved is not None
     assert retrieved.id == doc.id
 
-    non_retrieved = get_user_document(session, doc.id, "user2")
+    non_retrieved = get_user_document(session, doc.id, 2)
     assert non_retrieved is None
 
     # Delete document
-    deleted = delete_user_document(session, doc.id, "user1")
+    deleted = delete_user_document(session, doc.id, 1)
     session.commit()
     assert deleted is True
 
-    assert get_user_document(session, doc.id, "user1") is None
-    assert delete_user_document(session, doc.id, "user1") is False
+    assert get_user_document(session, doc.id, 1) is None
+    assert delete_user_document(session, doc.id, 1) is False
 
 
 from unittest.mock import patch
@@ -81,19 +81,19 @@ def test_list_user_documents_aggregates_negative_impact_without_cross_contaminat
     session = _setup_in_memory_db()
 
     doc_none = create_document_with_chunks(
-        session=session, user_id="agg_user", title="NoFeedbackDoc",
+        session=session, user_id=3, title="NoFeedbackDoc",
         content="Full text content", chunk_contents=["a", "b"],
     )
     doc_one = create_document_with_chunks(
-        session=session, user_id="agg_user", title="OneNegativeDoc",
+        session=session, user_id=3, title="OneNegativeDoc",
         content="Full text content", chunk_contents=["a"],
     )
     doc_three = create_document_with_chunks(
-        session=session, user_id="agg_user", title="ThreeNegativesDoc",
+        session=session, user_id=3, title="ThreeNegativesDoc",
         content="Full text content", chunk_contents=["a", "b", "c"],
     )
     other_user_doc = create_document_with_chunks(
-        session=session, user_id="someone_else", title="OtherUserDoc",
+        session=session, user_id=4, title="OtherUserDoc",
         content="Full text content", chunk_contents=["a"],
     )
     session.flush()
@@ -107,7 +107,7 @@ def test_list_user_documents_aggregates_negative_impact_without_cross_contaminat
 
     session.commit()
 
-    result = list_user_documents(session, "agg_user")
+    result = list_user_documents(session, 3)
 
     assert isinstance(result, list)
     assert len(result) == 3
@@ -126,11 +126,11 @@ def test_list_user_documents_issues_a_single_query():
     session = _setup_in_memory_db()
 
     doc_a = create_document_with_chunks(
-        session=session, user_id="query_user", title="DocA",
+        session=session, user_id=5, title="DocA",
         content="Full text content", chunk_contents=["a", "b"],
     )
     doc_b = create_document_with_chunks(
-        session=session, user_id="query_user", title="DocB",
+        session=session, user_id=5, title="DocB",
         content="Full text content", chunk_contents=["a"],
     )
     session.flush()
@@ -149,7 +149,7 @@ def test_list_user_documents_issues_a_single_query():
     engine = session.get_bind()
     event.listen(engine, "before_cursor_execute", _record_select)
     try:
-        result = list_user_documents(session, "query_user")
+        result = list_user_documents(session, 5)
     finally:
         event.remove(engine, "before_cursor_execute", _record_select)
 
@@ -163,7 +163,7 @@ def test_mark_document_reviewed(mock_invalidate):
 
     doc = create_document_with_chunks(
         session=session,
-        user_id="review_user",
+        user_id=6,
         title="Review Document",
         content="Full text content",
         chunk_contents=[],
@@ -171,14 +171,12 @@ def test_mark_document_reviewed(mock_invalidate):
     )
     session.commit()
 
-    # User dict required by the service signature
-    user_dict = {"username": "review_user"}
 
     # Initial state
     assert doc.last_reviewed_at is None
 
     # Mark as reviewed
-    reviewed_doc = mark_document_reviewed(session, user_dict, doc.id)
+    reviewed_doc = mark_document_reviewed(session, 6, doc.id)
     assert reviewed_doc is not None
     assert reviewed_doc.id == doc.id
     assert reviewed_doc.last_reviewed_at is not None
@@ -186,7 +184,6 @@ def test_mark_document_reviewed(mock_invalidate):
 
     # Try with wrong user
     mock_invalidate.reset_mock()
-    wrong_user_dict = {"username": "wrong_user"}
-    non_doc = mark_document_reviewed(session, wrong_user_dict, doc.id)
+    non_doc = mark_document_reviewed(session, 7, doc.id)
     assert non_doc is None
     mock_invalidate.assert_not_called()

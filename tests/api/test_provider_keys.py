@@ -68,7 +68,7 @@ def test_get_provider_keys_returns_masked_values():
     assert len(data) == 1
     assert data[0]["id"] == created_id
     assert data[0]["provider"] == "openai"
-    assert data[0]["masked_key"].endswith("***")
+    assert data[0]["masked_key"] == "sk-***4567"
     assert "sk-testkey1234567" not in data[0]["masked_key"]
     app.dependency_overrides.clear()
 
@@ -102,3 +102,18 @@ def test_delete_nonexistent_provider_key_returns_404():
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Provider key not found"
     app.dependency_overrides.clear()
+
+
+def test_users_cannot_see_or_delete_each_others_keys():
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    owner_headers, _ = login(client, unique_username("key_owner"))
+    other_headers, _ = login(client, unique_username("key_other"))
+
+    created = client.post("/provider-keys", json={"provider": "openai", "key": "sk-ownerkey12345678"}, headers=owner_headers)
+    key_id = created.json()["id"]
+
+    assert client.get("/provider-keys", headers=other_headers).json() == []
+    assert client.delete(f"/provider-keys/{key_id}", headers=other_headers).status_code == 404
+    assert [k["id"] for k in client.get("/provider-keys", headers=owner_headers).json()] == [key_id]

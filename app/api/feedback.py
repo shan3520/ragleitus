@@ -1,11 +1,17 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List
 
 from app.db.database import get_db
-from app.api.auth import get_current_user
-from app.services.feedback_service import get_recent_negative_feedback, get_top_negative_feedback_queries, create_feedback
+from app.api.deps import get_current_user
+from app.models.user import User
+from app.services.feedback_service import (
+    SearchLogNotFoundError,
+    create_feedback,
+    get_recent_negative_feedback,
+    get_top_negative_feedback_queries,
+)
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
@@ -22,12 +28,15 @@ class FeedbackCreate(BaseModel):
 def submit_feedback(
     data: FeedbackCreate,
     session: Session = Depends(get_db),
-    user: dict = Depends(get_current_user)
+    user: User = Depends(get_current_user)
 ):
     """
     Submit feedback for a search log and link retrieved documents.
     """
-    fb = create_feedback(session, data.search_log_id, data.is_positive, data.comment)
+    try:
+        fb = create_feedback(session, data.search_log_id, data.is_positive, data.comment, user_id=user.id)
+    except SearchLogNotFoundError:
+        raise HTTPException(status_code=404, detail="Search log not found")
     return {
         "id": fb.id,
         "search_log_id": fb.search_log_id,
@@ -42,20 +51,20 @@ def submit_feedback(
 def get_negative_feedback(
     limit: int = Query(10, ge=1, le=100),
     session: Session = Depends(get_db),
-    user: dict = Depends(get_current_user)
+    user: User = Depends(get_current_user)
 ):
     """
     Get recent negative feedback with the original query, generated answer, and user comment.
     """
-    return get_recent_negative_feedback(session, limit)
+    return get_recent_negative_feedback(session, limit, user_id=user.id)
 
 @router.get("/top-negative-queries", response_model=List[TopNegativeQueryResponse])
 def get_top_negative_feedback_queries_endpoint(
     limit: int = Query(10, ge=1, le=100),
     session: Session = Depends(get_db),
-    user: dict = Depends(get_current_user)
+    user: User = Depends(get_current_user)
 ):
     """
     Get top negative feedback queries sorted by their negative feedback counts.
     """
-    return get_top_negative_feedback_queries(session, limit)
+    return get_top_negative_feedback_queries(session, limit, user_id=user.id)

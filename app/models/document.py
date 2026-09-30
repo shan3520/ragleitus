@@ -9,7 +9,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     sha256 = Column(String(64), nullable=True, index=True)
     content = Column(Text, nullable=True)
@@ -39,6 +39,7 @@ class UnmatchedSearch(Base):
     __tablename__ = "unmatched_searches"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     query_text = Column(String(255), nullable=False)
     duration_ms = Column(Float, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -50,6 +51,7 @@ class SearchQueryLog(Base):
     __tablename__ = "search_query_logs"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     query_text = Column(String(255), nullable=False, index=True)
     generated_answer = Column(Text, nullable=True)
     duration_ms = Column(Float, nullable=True)
@@ -74,7 +76,7 @@ class SavedSearch(Base):
     __tablename__ = "saved_searches"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(String(255), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     search_name = Column(String(255), nullable=False)
     query_text = Column(String(255), nullable=False)
     applied_filters = Column(JSON, nullable=True)

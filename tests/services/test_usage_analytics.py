@@ -37,8 +37,8 @@ def test_get_search_analytics_raises_when_only_old_activity(db_session):
 def test_get_search_analytics_excludes_logs_outside_window(db_session):
     now = datetime.now(timezone.utc)
 
-    doc_recent = Document(title="RecentDoc", status="ready")
-    doc_ancient = Document(title="AncientDoc", status="ready")
+    doc_recent = Document(user_id=1, title="RecentDoc", status="ready")
+    doc_ancient = Document(user_id=1, title="AncientDoc", status="ready")
     db_session.add_all([doc_recent, doc_ancient])
     db_session.commit()
 
@@ -74,8 +74,8 @@ def test_get_popular_searches_excludes_logs_outside_window(db_session):
 def test_get_popular_documents_excludes_logs_outside_window(db_session):
     now = datetime.now(timezone.utc)
 
-    doc_recent = Document(title="RecentDoc", status="ready")
-    doc_ancient = Document(title="AncientDoc", status="ready")
+    doc_recent = Document(user_id=1, title="RecentDoc", status="ready")
+    doc_ancient = Document(user_id=1, title="AncientDoc", status="ready")
     db_session.add_all([doc_recent, doc_ancient])
     db_session.commit()
 
@@ -104,8 +104,8 @@ def test_get_popular_documents_raises_on_empty_window(db_session):
 def test_get_search_analytics_with_data(db_session):
     now = datetime.now(timezone.utc)
     
-    doc1 = Document(title="Doc1", status="ready")
-    doc2 = Document(title="Doc2", status="ready")
+    doc1 = Document(user_id=1, title="Doc1", status="ready")
+    doc2 = Document(user_id=1, title="Doc2", status="ready")
     db_session.add_all([doc1, doc2])
     db_session.commit()
     
@@ -138,8 +138,8 @@ def test_get_search_analytics_with_data(db_session):
 def test_get_search_analytics_ties(db_session):
     now = datetime.now(timezone.utc)
     
-    doc1 = Document(title="Doc1", status="ready")
-    doc2 = Document(title="Doc2", status="ready")
+    doc1 = Document(user_id=1, title="Doc1", status="ready")
+    doc2 = Document(user_id=1, title="Doc2", status="ready")
     db_session.add_all([doc1, doc2])
     db_session.commit()
     
@@ -184,9 +184,9 @@ def test_get_popular_searches(db_session):
 def test_get_popular_documents(db_session):
     now = datetime.now(timezone.utc)
     
-    doc1 = Document(title="Doc1", status="ready")
-    doc2 = Document(title="Doc2", status="ready")
-    doc3 = Document(title="Doc3", status="ready")
+    doc1 = Document(user_id=1, title="Doc1", status="ready")
+    doc2 = Document(user_id=1, title="Doc2", status="ready")
+    doc3 = Document(user_id=1, title="Doc3", status="ready")
     db_session.add_all([doc1, doc2, doc3])
     db_session.commit()
     
@@ -272,3 +272,19 @@ def test_get_daily_search_latency_defaults_null_durations_to_zero(db_session):
 
 def test_get_daily_search_latency_empty_returns_empty_list(db_session):
     assert get_daily_search_latency(db_session, days=30) == []
+
+
+def test_analytics_are_scoped_to_the_requested_user(db_session):
+    now = datetime.now(timezone.utc)
+    mine = SearchQueryLog(user_id=1, query_text="mine", timestamp=now, duration_ms=10.0)
+    theirs = SearchQueryLog(user_id=2, query_text="theirs", timestamp=now, duration_ms=500.0)
+    db_session.add_all([mine, theirs])
+    db_session.commit()
+
+    assert get_popular_searches(db_session, user_id=1) == [{"query": "mine", "count": 1}]
+    assert get_search_analytics(db_session, user_id=1)["top_queries"] == [{"query": "mine", "count": 1}]
+    latency = get_daily_search_latency(db_session, user_id=1)
+    assert [row["max_duration_ms"] for row in latency] == [10.0]
+
+    with pytest.raises(NoSearchActivityError):
+        get_popular_searches(db_session, user_id=3)

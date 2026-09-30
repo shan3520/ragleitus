@@ -7,5 +7,6 @@ from .feedback import SearchFeedback
 from .query_cluster import QueryCluster
 from .audit_log import AuditLog
 from .telemetry_event import TelemetryEvent
+from .conversation import Conversation, Message
 
-__all__ = ["Base", "User", "Prompt", "Experiment", "Evaluation", "ProviderKey", "Document", "Chunk", "Group", "SearchFeedback", "QueryCluster", "AuditLog", "TelemetryEvent"]
+__all__ = ["Base", "User", "Prompt", "Experiment", "Evaluation", "ProviderKey", "Document", "Chunk", "Group", "SearchFeedback", "QueryCluster", "AuditLog", "TelemetryEvent", "Conversation", "Message"]

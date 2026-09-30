@@ -17,9 +17,11 @@ the [n] markers in the answer are resolved back to documents and pages.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import AsyncIterator, Callable
 
 from sqlalchemy.orm import Session
@@ -80,10 +82,13 @@ class PreparedTurn:
 # ---------------------------------------------------------------- conversations
 
 
+DEFAULT_TITLE = "New conversation"
+
+
 def create_conversation(session: Session, user_id: int, title: str | None = None, provider: str | None = None, model: str | None = None) -> Conversation:
     if provider is not None:
         _check_provider_name(provider)
-    conversation = Conversation(user_id=user_id, title=(title or "New conversation")[:255], provider=provider, model=model)
+    conversation = Conversation(user_id=user_id, title=(title or DEFAULT_TITLE)[:255], provider=provider, model=model)
     session.add(conversation)
     session.flush()
     return conversation
@@ -155,6 +160,22 @@ def format_context(sources: list[RetrievedChunk]) -> str:
     return "\n\n".join(blocks)
 
 
+def answered_history(messages: list[Message], max_turns: int) -> list[Message]:
+    """The last `max_turns` complete exchanges: a user message and the assistant answer right after it.
+
+    A question whose answer failed or was interrupted has no answer stored. It
+    is left out, so the prompt keeps alternating user/assistant, which
+    Anthropic and Gemini require.
+    """
+    if max_turns <= 0:
+        return []
+    pairs: list[tuple[Message, Message]] = []
+    for previous, current in zip(messages, messages[1:]):
+        if previous.role == "user" and current.role == "assistant":
+            pairs.append((previous, current))
+    return [m for pair in pairs[-max_turns:] for m in pair]
+
+
 def build_prompt(history: list[Message], question: str, sources: list[RetrievedChunk]) -> list[ChatMessage]:
     system = format_prompt(SYSTEM_PROMPT, {"context": format_context(sources)})
     turns = [ChatMessage(m.role, m.content) for m in history if m.role in ("user", "assistant")]
@@ -210,17 +231,18 @@ def prepare_turn(
     except MissingProviderKeyError:
         raise ProviderChoiceError(f"No API key stored for provider '{provider_name}'.")
 
-    history_limit = settings.chat_history_turns * 2
-    history = list(conversation.messages)[-history_limit:] if history_limit else []
+    history = answered_history(list(conversation.messages), settings.chat_history_turns)
     sources = retriever(session, user_id, content, document_ids=document_ids)
     prompt = build_prompt(history, content, sources)
 
     user_message = Message(conversation_id=conversation.id, role="user", content=content)
     session.add(user_message)
-    if not conversation.messages or conversation.title == "New conversation":
+    if conversation.title == DEFAULT_TITLE:
         conversation.title = content[:80]
     conversation.provider = provider_name
     conversation.model = model_name
+    # Set explicitly: assigning unchanged values is not a change, so onupdate would not fire.
+    conversation.updated_at = datetime.now(timezone.utc)
     session.flush()
 
     return PreparedTurn(
@@ -235,45 +257,33 @@ def prepare_turn(
     )
 
 
-async def stream_turn(turn: PreparedTurn, session_factory: Callable[[], Session] = SessionLocal) -> AsyncIterator[tuple[str, dict]]:
-    """Yield ("token", {...}) events, then ("citations", {...}) and ("done", {...}),
-    or a single ("error", {...}) if the provider call fails."""
-    started = time.perf_counter()
-    ttft_ms = None
-    parts: list[str] = []
-    usage = Usage()
-    served_model = None
-    finish_reason = None
-    prompt_text = "\n\n".join(m.content for m in turn.prompt)
-
+def _record_failure(
+    session_factory: Callable[[], Session], turn: PreparedTurn, prompt_text: str, latency_ms: float, exc: ProviderError
+) -> None:
+    session = session_factory()
     try:
-        async for event in turn.provider.stream(turn.prompt, turn.model, settings.llm_max_output_tokens):
-            if event.kind == "delta":
-                if ttft_ms is None:
-                    ttft_ms = (time.perf_counter() - started) * 1000
-                parts.append(event.text)
-                yield "token", {"text": event.text}
-            else:
-                usage, served_model, finish_reason = event.usage, event.model, event.finish_reason
-    except ProviderError as exc:
-        session = session_factory()
-        try:
-            telemetry.record_llm_call(
-                session, user_id=turn.user_id, operation="chat", provider=turn.provider_name, model=turn.model,
-                latency_ms=(time.perf_counter() - started) * 1000, error=exc, conversation_id=turn.conversation_id,
-                prompt_text=prompt_text,
-            )
-            session.commit()
-        finally:
-            session.close()
-        yield "error", {"message": exc.message, "status_code": exc.status_code}
-        return
+        telemetry.record_llm_call(
+            session, user_id=turn.user_id, operation="chat", provider=turn.provider_name, model=turn.model,
+            latency_ms=latency_ms, error=exc, conversation_id=turn.conversation_id, prompt_text=prompt_text,
+        )
+        session.commit()
+    finally:
+        session.close()
 
-    latency_ms = (time.perf_counter() - started) * 1000
-    answer = "".join(parts)
-    citations = extract_citations(answer, turn.sources)
-    model_name = served_model or turn.model
 
+def _store_answer(
+    session_factory: Callable[[], Session],
+    turn: PreparedTurn,
+    prompt_text: str,
+    answer: str,
+    citations: list[dict],
+    model_name: str,
+    latency_ms: float,
+    ttft_ms: float | None,
+    usage: Usage,
+    finish_reason: str | None,
+) -> tuple[int, int | None, int | None, float | None]:
+    """Save the assistant message and its telemetry row; returns (message_id, prompt_tokens, completion_tokens, cost)."""
     session = session_factory()
     try:
         event = telemetry.record_llm_call(
@@ -297,11 +307,52 @@ async def stream_turn(turn: PreparedTurn, session_factory: Callable[[], Session]
         session.add(message)
         session.flush()
         event.message_id = message.id
+        session.query(Conversation).filter(Conversation.id == turn.conversation_id).update(
+            {Conversation.updated_at: datetime.now(timezone.utc)}, synchronize_session=False
+        )
         session.commit()
-        message_id = message.id
-        prompt_tokens, completion_tokens, cost = event.prompt_tokens, event.completion_tokens, event.cost_usd
+        return message.id, event.prompt_tokens, event.completion_tokens, event.cost_usd
     finally:
         session.close()
+
+
+async def stream_turn(turn: PreparedTurn, session_factory: Callable[[], Session] = SessionLocal) -> AsyncIterator[tuple[str, dict]]:
+    """Yield ("token", {...}) events, then ("citations", {...}) and ("done", {...}),
+    or a single ("error", {...}) if the provider call fails."""
+    started = time.perf_counter()
+    ttft_ms = None
+    parts: list[str] = []
+    usage = Usage()
+    served_model = None
+    finish_reason = None
+    prompt_text = "\n\n".join(m.content for m in turn.prompt)
+
+    try:
+        async for event in turn.provider.stream(turn.prompt, turn.model, settings.llm_max_output_tokens):
+            if event.kind == "delta":
+                if ttft_ms is None:
+                    ttft_ms = (time.perf_counter() - started) * 1000
+                parts.append(event.text)
+                yield "token", {"text": event.text}
+            else:
+                usage, served_model, finish_reason = event.usage, event.model, event.finish_reason
+    except ProviderError as exc:
+        # Blocking database work runs in a thread so other streams keep flowing.
+        await asyncio.to_thread(
+            _record_failure, session_factory, turn, prompt_text, (time.perf_counter() - started) * 1000, exc
+        )
+        yield "error", {"message": exc.message, "status_code": exc.status_code}
+        return
+
+    latency_ms = (time.perf_counter() - started) * 1000
+    answer = "".join(parts)
+    citations = extract_citations(answer, turn.sources)
+    model_name = served_model or turn.model
+
+    message_id, prompt_tokens, completion_tokens, cost = await asyncio.to_thread(
+        _store_answer, session_factory, turn, prompt_text, answer, citations, model_name,
+        latency_ms, ttft_ms, usage, finish_reason,
+    )
 
     yield "citations", {"citations": citations}
     yield "done", {

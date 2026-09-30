@@ -28,6 +28,13 @@ def _check_group(session: Session, user: User, group_id: int | None) -> None:
         raise HTTPException(status_code=404, detail="Group not found")
 
 
+def _read_upload(file: UploadFile) -> bytes:
+    try:
+        return ingestion.read_limited(file.file)
+    except ingestion.FileTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc))
+
+
 def _ingest(
     session: Session,
     user: User,
@@ -38,7 +45,7 @@ def _ingest(
     content: bytes | None = None,
 ):
     _check_group(session, user, group_id)
-    content = content if content is not None else file.file.read()
+    content = content if content is not None else _read_upload(file)
     try:
         document = ingestion.create_document(session, user.id, file.filename or "upload", content, group_id, pages=pages)
     except ingestion.DuplicateDocumentError as exc:
@@ -96,7 +103,7 @@ def extract_document(
     and returns the extracted text of each non-empty page."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
-    content = file.file.read()
+    content = _read_upload(file)
     try:
         pages = ingestion.extract_pages(file.filename, content)
     except ingestion.IngestionError as exc:

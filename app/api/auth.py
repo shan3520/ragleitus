@@ -63,7 +63,7 @@ def me(user: User = Depends(get_current_user)):
     return user
 
 
-@router.patch("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+@router.patch("/me/password", response_model=TokenResponse)
 def change_password(
     req: PasswordChangeRequest,
     user: User = Depends(get_current_user),
@@ -74,3 +74,5 @@ def change_password(
     except auth_service.InvalidCredentialsError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
     session.commit()
+    # Earlier tokens, including the one used for this request, stop working; here is a fresh one.
+    return {"access_token": auth_service.create_access_token(user), "token_type": "bearer"}

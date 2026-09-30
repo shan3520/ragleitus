@@ -165,3 +165,71 @@ def test_conversations_are_private(env):
     with pytest.raises(chat_service.ConversationNotFoundError):
         chat_service.delete_conversation(session, other.id, conversation.id)
     assert chat_service.list_conversations(session, other.id) == []
+
+
+def _msg(role, content):
+    return Message(role=role, content=content)
+
+
+def test_history_keeps_only_answered_questions_and_alternates():
+    messages = [
+        _msg("user", "q1"), _msg("assistant", "a1"),
+        _msg("user", "q2 failed"),  # provider error: no answer stored
+        _msg("user", "q3"), _msg("assistant", "a3"),
+        _msg("user", "q4 interrupted"),
+    ]
+    history = chat_service.answered_history(messages, max_turns=6)
+    assert [m.content for m in history] == ["q1", "a1", "q3", "a3"]
+    assert [m.content for m in chat_service.answered_history(messages, max_turns=1)] == ["q3", "a3"]
+    assert chat_service.answered_history(messages, max_turns=0) == []
+
+
+def test_turn_after_a_failed_turn_sends_alternating_roles(env):
+    session_factory, session, user_id = env
+    _add_key(session, user_id)
+    conversation = chat_service.create_conversation(session, user_id)
+    failing = FakeFactory(FakeProvider(error=ProviderError("openai returned HTTP 429", status_code=429)))
+    turn = chat_service.prepare_turn(session, user_id, conversation.id, "Q1", factory=failing, retriever=lambda *a, **k: [])
+    session.commit()
+    with pytest.raises(chat_service.ChatProviderError):
+        asyncio.run(chat_service.run_turn(turn, session_factory))
+
+    session.expire_all()
+    turn2 = chat_service.prepare_turn(
+        session, user_id, conversation.id, "Q2", factory=FakeFactory(FakeProvider(reply="ok")), retriever=lambda *a, **k: []
+    )
+    assert [(m.role, m.content) for m in turn2.prompt[1:]] == [("user", "Q2")]
+
+
+def test_a_title_chosen_at_creation_is_kept(env):
+    _, session, user_id = env
+    _add_key(session, user_id)
+    conversation = chat_service.create_conversation(session, user_id, title="Q3 contract review")
+    chat_service.prepare_turn(
+        session, user_id, conversation.id, "What is the termination clause?",
+        factory=FakeFactory(FakeProvider(reply="x")), retriever=lambda *a, **k: [],
+    )
+    assert conversation.title == "Q3 contract review"
+
+
+def test_each_turn_moves_the_conversation_to_the_top(env):
+    session_factory, session, user_id = env
+    _add_key(session, user_id)
+    factory = FakeFactory(FakeProvider(reply="answer"))
+
+    def ask(conversation_id, question):
+        turn = chat_service.prepare_turn(session, user_id, conversation_id, question, factory=factory, retriever=lambda *a, **k: [])
+        session.commit()
+        asyncio.run(chat_service.run_turn(turn, session_factory))
+        session.expire_all()
+
+    older = chat_service.create_conversation(session, user_id)
+    session.commit()
+    ask(older.id, "first")
+    newer = chat_service.create_conversation(session, user_id)
+    session.commit()
+    assert [c.id for c in chat_service.list_conversations(session, user_id)] == [newer.id, older.id]
+
+    # Same provider, model and title as before: nothing about the conversation row changes but the time.
+    ask(older.id, "second")
+    assert [c.id for c in chat_service.list_conversations(session, user_id)] == [older.id, newer.id]

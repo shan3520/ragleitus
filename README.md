@@ -72,7 +72,7 @@ AUTH="Authorization: Bearer $TOKEN"
 # 2. Add a provider key (checked against the provider, stored encrypted)
 curl -s -X POST $API/api/provider-keys -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"provider": "anthropic", "key": "sk-ant-..."}'
-#    Self-hosted server instead:
+#    Self-hosted server instead (private addresses need ALLOW_PRIVATE_PROVIDER_URLS=true):
 #    -d '{"provider": "custom", "key": "none", "base_url": "http://localhost:11434/v1"}'
 
 # 3. Upload the sample documents and wait for status "ready"
@@ -148,6 +148,15 @@ lists them all. Only these are required:
 `DATABASE_URL` accepts any SQLAlchemy URL. PostgreSQL uses
 `postgresql+psycopg://user:pass@host/db`. `VECTOR_STORE_URL` takes a Qdrant URL,
 a local directory, or `:memory:`.
+
+Self-hosted providers (Ollama, LM Studio, vLLM) are added as `custom` with a
+base URL. The server calls that URL, so by default it must be a public address;
+set `ALLOW_PRIVATE_PROVIDER_URLS=true` to allow localhost, your LAN or other
+containers. Error messages from a custom provider carry only the HTTP status,
+never the response body.
+
+Changing your password (`PATCH /auth/me/password`) signs out every existing
+session and returns a new token.
 
 Cost estimates use the table in
 [`app/services/llm/pricing.py`](app/services/llm/pricing.py) (USD per million

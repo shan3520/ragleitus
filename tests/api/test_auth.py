@@ -69,7 +69,11 @@ def test_change_password():
     assert r.status_code == 400
 
     r = client.patch("/auth/me/password", json={"current_password": "password123", "new_password": "newpassword1"}, headers=headers)
-    assert r.status_code == 204
+    assert r.status_code == 200
+    # The token used before the change no longer works; the one returned does.
+    assert client.get("/auth/me", headers=headers).status_code == 401
+    new_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    assert client.get("/auth/me", headers=new_headers).json()["username"] == "changer"
 
     assert client.post("/auth/login", json={"username": "changer", "password": "password123"}).status_code == 401
     assert client.post("/auth/login", json={"username": "changer", "password": "newpassword1"}).status_code == 200

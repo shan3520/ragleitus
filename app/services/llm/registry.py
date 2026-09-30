@@ -11,6 +11,7 @@ from app.services.llm.base import ChatProvider
 from app.services.llm.gemini import DEFAULT_BASE_URL as GEMINI_BASE_URL
 from app.services.llm.gemini import GeminiProvider
 from app.services.llm.openai_compatible import OpenAICompatibleProvider
+from app.services.llm.url_guard import ensure_public_url
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,12 @@ def create_provider(name: str, api_key: str, base_url: str | None = None) -> Cha
     url = base_url or spec.base_url
     if not url:
         raise ValueError(f"provider {name!r} needs a base URL")
+    if spec.requires_base_url:
+        # The URL comes from the user: refuse private addresses and don't echo response bodies.
+        return OpenAICompatibleProvider(
+            name, api_key, url, stream_usage_option=spec.stream_usage_option,
+            url_guard=ensure_public_url, expose_error_body=False,
+        )
     return OpenAICompatibleProvider(name, api_key, url, stream_usage_option=spec.stream_usage_option)
 
 

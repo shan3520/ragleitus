@@ -30,9 +30,16 @@ def _error_text(response: httpx.Response) -> str:
     return str(body)[:300]
 
 
-async def raise_for_status(response: httpx.Response, provider: str) -> None:
+async def raise_for_status(response: httpx.Response, provider: str, *, include_body: bool = True) -> None:
+    """Raise ProviderError for an error response.
+
+    `include_body=False` leaves the response text out of the message. Used for
+    user-supplied URLs, so the error can't be used to read an arbitrary server.
+    """
     if response.status_code < 400:
         return
+    if not include_body:
+        raise ProviderError(f"{provider} returned HTTP {response.status_code}", status_code=response.status_code)
     await response.aread()
     raise ProviderError(
         f"{provider} returned HTTP {response.status_code}: {_error_text(response)}",

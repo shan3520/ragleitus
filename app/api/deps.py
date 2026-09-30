@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.user import User
 from app.services.auth_service import InvalidTokenError, get_user_from_token
+from app.services.llm import ProviderFactory, create_provider
 
 
 def _unauthorized(detail: str) -> HTTPException:
@@ -29,3 +30,8 @@ def get_current_user(
         return get_user_from_token(session, token.strip())
     except InvalidTokenError:
         raise _unauthorized("Invalid or expired token")
+
+
+def get_provider_factory() -> ProviderFactory:
+    """How chat providers are built. Tests override this to avoid network calls."""
+    return create_provider

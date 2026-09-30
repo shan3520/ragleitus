@@ -46,14 +46,15 @@ def masked_value(pk: ProviderKey) -> str:
         return "***"
 
 
-def save_provider_key(session: Session, user_id: int, provider: str, encrypted: str) -> ProviderKey:
+def save_provider_key(session: Session, user_id: int, provider: str, encrypted: str, base_url: str | None = None) -> ProviderKey:
     """Store the user's key for a provider, replacing any key they already had for it."""
     pk = get_provider_key(session, user_id, provider)
     if pk is None:
-        pk = ProviderKey(user_id=user_id, provider=provider, encrypted_key=encrypted)
+        pk = ProviderKey(user_id=user_id, provider=provider, encrypted_key=encrypted, base_url=base_url)
         session.add(pk)
     else:
         pk.encrypted_key = encrypted
+        pk.base_url = base_url
     session.flush()
     session.refresh(pk)
     return pk
@@ -71,6 +72,18 @@ def get_decrypted_key(session: Session, user_id: int, provider: str) -> str | No
     """Return the user's plaintext key for a provider, or None if they have not stored one."""
     pk = get_provider_key(session, user_id, provider)
     return decrypt_key(pk.encrypted_key) if pk else None
+
+
+class MissingProviderKeyError(Exception):
+    """The user has not stored a key for the provider they asked to use."""
+
+
+def create_user_provider(session: Session, user_id: int, provider: str, factory):
+    """Build a chat provider authenticated with the user's own stored key."""
+    pk = get_provider_key(session, user_id, provider)
+    if pk is None:
+        raise MissingProviderKeyError(provider)
+    return factory(provider, decrypt_key(pk.encrypted_key), pk.base_url)
 
 
 def list_provider_keys(session: Session, user_id: int) -> list[ProviderKey]:

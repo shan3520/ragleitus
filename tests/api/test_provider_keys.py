@@ -1,119 +1,160 @@
-import tempfile
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
+from app.api.deps import get_provider_factory
+from app.db.database import SessionLocal
 from app.main import app
-from app.core.middleware import rate_limiter
-from app.db.database import get_db
-from app.models import Base, ProviderKey
+from app.models import ProviderKey
+from app.services.llm import ProviderError
+from tests.fakes import FakeFactory, FakeProvider
+from tests.helpers import login, unique_username
+
+VALID_KEY = "sk-testkey1234567"
 
 
-def _setup_test_db(username: str = "key_user"):
-    rate_limiter.reset()
-    tf = tempfile.NamedTemporaryFile(delete=False)
-    tf.close()
-    db_url = f"sqlite:///{tf.name}"
-    engine = create_engine(db_url, connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-    def override_get_db():
-        db = TestingSessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-
+def _client(factory: FakeFactory | None = None):
+    factory = factory or FakeFactory()
+    app.dependency_overrides[get_provider_factory] = lambda: factory
     client = TestClient(app)
-    client.post("/auth/register", json={"username": username, "password": "password123"})
-    login_resp = client.post("/auth/login", json={"username": username, "password": "password123"})
-    token = login_resp.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    return client, headers, TestingSessionLocal
+    headers, user_id = login(client, unique_username("keys"))
+    return client, headers, factory
 
 
-def test_post_provider_key_stores_encrypted_value():
-    client, headers, TestingSessionLocal = _setup_test_db("user_pk1")
+def test_post_provider_key_validates_and_stores_encrypted_value():
+    client, headers, factory = _client()
 
-    payload = {"provider": "openai", "key": "sk-testkey1234567"}
-    resp = client.post("/provider-keys", json=payload, headers=headers)
+    resp = client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers)
     assert resp.status_code == 200
     data = resp.json()
-    assert "id" in data
     assert data["provider"] == "openai"
+    assert data["masked_key"] == "sk-***4567"
+    assert VALID_KEY not in resp.text
+    assert factory.created == [("openai", VALID_KEY, None)]
 
-    session = TestingSessionLocal()
+    session = SessionLocal()
     stored = session.query(ProviderKey).filter_by(id=data["id"]).one()
-    assert stored.encrypted_key != payload["key"]
-    assert stored.provider == payload["provider"]
+    assert stored.encrypted_key != VALID_KEY
+    assert VALID_KEY not in stored.encrypted_key
     session.close()
-    app.dependency_overrides.clear()
+
+
+def test_legacy_path_still_works():
+    client, headers, _ = _client()
+    resp = client.post("/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers)
+    assert resp.status_code == 200
+    assert client.get("/provider-keys", headers=headers).json()[0]["provider"] == "openai"
+
+
+def test_rejected_key_is_not_stored():
+    client, headers, _ = _client(FakeFactory(FakeProvider(error=ProviderError("HTTP 401", status_code=401))))
+
+    resp = client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "OpenAI rejected the key."
+    assert client.get("/api/provider-keys", headers=headers).json() == []
+
+
+def test_unreachable_provider_returns_502():
+    client, headers, _ = _client(FakeFactory(FakeProvider(error=ProviderError("Could not reach openai"))))
+    resp = client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers)
+    assert resp.status_code == 502
+
+
+def test_validation_can_be_skipped():
+    client, headers, factory = _client()
+    resp = client.post("/api/provider-keys", json={"provider": "groq", "key": "gsk_x", "validate": False}, headers=headers)
+    assert resp.status_code == 200
+    assert factory.created == []
+
+
+def test_unknown_provider_is_rejected():
+    client, headers, _ = _client()
+    resp = client.post("/api/provider-keys", json={"provider": "acme", "key": "k"}, headers=headers)
+    assert resp.status_code == 400
+
+
+def test_custom_provider_requires_and_stores_base_url():
+    client, headers, factory = _client()
+
+    resp = client.post("/api/provider-keys", json={"provider": "custom", "key": "none"}, headers=headers)
+    assert resp.status_code == 400
+
+    resp = client.post(
+        "/api/provider-keys",
+        json={"provider": "custom", "key": "none", "base_url": "http://localhost:11434/v1/"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["base_url"] == "http://localhost:11434/v1"
+    assert factory.created[-1] == ("custom", "none", "http://localhost:11434/v1")
+
+
+def test_saving_again_replaces_the_key():
+    client, headers, _ = _client()
+    first = client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers).json()
+    second = client.post("/api/provider-keys", json={"provider": "openai", "key": "sk-replacement9999"}, headers=headers).json()
+    assert first["id"] == second["id"]
+    keys = client.get("/api/provider-keys", headers=headers).json()
+    assert [k["masked_key"] for k in keys] == ["sk-***9999"]
 
 
 def test_get_provider_keys_returns_masked_values():
-    client, headers, _ = _setup_test_db("user_pk2")
+    client, headers, _ = _client()
+    created_id = client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers).json()["id"]
 
-    payload = {"provider": "openai", "key": "sk-testkey1234567"}
-    resp = client.post("/provider-keys", json=payload, headers=headers)
-    assert resp.status_code == 200
-    created_id = resp.json()["id"]
-
-    resp = client.get("/provider-keys", headers=headers)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) == 1
-    assert data[0]["id"] == created_id
-    assert data[0]["provider"] == "openai"
-    assert data[0]["masked_key"] == "sk-***4567"
-    assert "sk-testkey1234567" not in data[0]["masked_key"]
-    app.dependency_overrides.clear()
+    data = client.get("/api/provider-keys", headers=headers).json()
+    assert data == [{"id": created_id, "provider": "openai", "masked_key": "sk-***4567", "base_url": None}]
 
 
 def test_delete_provider_key_removes_key():
-    client, headers, _ = _setup_test_db("user_pk3")
+    client, headers, _ = _client()
+    created_id = client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers).json()["id"]
 
-    payload = {"provider": "openai", "key": "sk-testkey1234567"}
-    resp = client.post("/provider-keys", json=payload, headers=headers)
-    assert resp.status_code == 200
-    created_id = resp.json()["id"]
-
-    resp = client.get("/provider-keys", headers=headers)
-    assert resp.status_code == 200
-    assert len(resp.json()) == 1
-
-    resp = client.delete(f"/provider-keys/{created_id}", headers=headers)
+    resp = client.delete(f"/api/provider-keys/{created_id}", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["detail"] == "Provider key deleted"
-
-    resp = client.get("/provider-keys", headers=headers)
-    assert resp.status_code == 200
-    assert len(resp.json()) == 0
-    app.dependency_overrides.clear()
+    assert client.get("/api/provider-keys", headers=headers).json() == []
 
 
 def test_delete_nonexistent_provider_key_returns_404():
-    client, headers, _ = _setup_test_db("user_pk4")
-
-    resp = client.delete("/provider-keys/999", headers=headers)
+    client, headers, _ = _client()
+    resp = client.delete("/api/provider-keys/999", headers=headers)
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Provider key not found"
-    app.dependency_overrides.clear()
+
+
+def test_validate_stored_key():
+    factory = FakeFactory()
+    client, headers, _ = _client(factory)
+    client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers)
+
+    resp = client.post("/api/provider-keys/openai/validate", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["valid"] is True
+
+    factory.provider.error = ProviderError("HTTP 401", status_code=401)
+    assert client.post("/api/provider-keys/openai/validate", headers=headers).json()["valid"] is False
+
+    assert client.post("/api/provider-keys/groq/validate", headers=headers).status_code == 404
+
+
+def test_list_providers_marks_configured_ones():
+    client, headers, _ = _client()
+    client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=headers)
+
+    providers = {p["name"]: p for p in client.get("/api/providers", headers=headers).json()}
+    assert providers["openai"]["configured"] is True
+    assert providers["anthropic"]["configured"] is False
+    assert providers["anthropic"]["default_model"] == "claude-opus-5-5"
+    assert providers["custom"]["requires_base_url"] is True
 
 
 def test_users_cannot_see_or_delete_each_others_keys():
-    from tests.helpers import login, unique_username
-
-    client = TestClient(app)
-    owner_headers, _ = login(client, unique_username("key_owner"))
+    client, owner_headers, _ = _client()
     other_headers, _ = login(client, unique_username("key_other"))
 
-    created = client.post("/provider-keys", json={"provider": "openai", "key": "sk-ownerkey12345678"}, headers=owner_headers)
-    key_id = created.json()["id"]
+    key_id = client.post("/api/provider-keys", json={"provider": "openai", "key": VALID_KEY}, headers=owner_headers).json()["id"]
 
-    assert client.get("/provider-keys", headers=other_headers).json() == []
-    assert client.delete(f"/provider-keys/{key_id}", headers=other_headers).status_code == 404
-    assert [k["id"] for k in client.get("/provider-keys", headers=owner_headers).json()] == [key_id]
+    assert client.get("/api/provider-keys", headers=other_headers).json() == []
+    assert client.delete(f"/api/provider-keys/{key_id}", headers=other_headers).status_code == 404
+    assert client.post("/api/provider-keys/openai/validate", headers=other_headers).status_code == 404
+    assert [k["id"] for k in client.get("/api/provider-keys", headers=owner_headers).json()] == [key_id]

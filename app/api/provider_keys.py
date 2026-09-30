@@ -1,79 +1,139 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, HttpUrl
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
-from app.models.user import User
+from app.api.deps import get_current_user, get_provider_factory
 from app.db.database import get_db
+from app.models.user import User
+from app.services.llm import PROVIDERS, ProviderFactory, UnknownProviderError, get_spec
 from app.services.provider_key import (
-    encrypt_key,
-    save_provider_key,
-    list_provider_keys,
+    decrypt_key,
     delete_provider_key,
-    mask_key,
+    encrypt_key,
+    get_provider_key,
+    list_provider_keys,
     masked_value,
+    save_provider_key,
 )
 from app.services.provider_validation import verify_provider_key
 
-router = APIRouter()
+router = APIRouter(tags=["providers"])
 
-# Alias for backward compatibility
-get_db_session = get_db
+
+class ProviderOut(BaseModel):
+    name: str
+    label: str
+    default_model: str
+    requires_base_url: bool
+    configured: bool
 
 
 class ProviderKeyIn(BaseModel):
     provider: str
-    key: str
+    key: str = Field(min_length=1, max_length=1000)
+    base_url: HttpUrl | None = None
+    validate_key: bool = Field(default=True, alias="validate")
 
 
 class ProviderKeyOut(BaseModel):
     id: int
     provider: str
     masked_key: str
-
-    @staticmethod
-    def mask_key(key: str) -> str:
-        """Mask the key for display (e.g., 'sk-***')."""
-        return mask_key(key)
+    base_url: str | None = None
 
 
-@router.post("/provider-keys")
-def create_provider_key(
+class ValidationOut(BaseModel):
+    valid: bool
+    detail: str
+
+
+def _out(pk) -> dict:
+    return {"id": pk.id, "provider": pk.provider, "masked_key": masked_value(pk), "base_url": pk.base_url}
+
+
+@router.get("/api/providers", response_model=list[ProviderOut])
+def list_providers(user: User = Depends(get_current_user), session: Session = Depends(get_db)):
+    """Supported LLM providers, and whether the current user has a key stored for each."""
+    configured = {pk.provider for pk in list_provider_keys(session, user.id)}
+    return [
+        ProviderOut(
+            name=spec.name,
+            label=spec.label,
+            default_model=spec.default_model,
+            requires_base_url=spec.requires_base_url,
+            configured=spec.name in configured,
+        )
+        for spec in PROVIDERS.values()
+    ]
+
+
+@router.post("/api/provider-keys", response_model=ProviderKeyOut)
+@router.post("/provider-keys", response_model=ProviderKeyOut, include_in_schema=False)
+async def create_provider_key(
     payload: ProviderKeyIn,
     user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
+    factory: ProviderFactory = Depends(get_provider_factory),
 ):
-    if not payload.provider or not payload.key:
-        raise HTTPException(status_code=400, detail="provider and key required")
-    if not verify_provider_key(payload.provider, payload.key):
-        raise HTTPException(status_code=400, detail="invalid provider key")
-    encrypted = encrypt_key(payload.key)
-    pk = save_provider_key(session, user.id, payload.provider, encrypted)
+    """Store (or replace) the user's key for a provider.
+
+    The key is checked against the provider before it is saved unless
+    `validate` is false. It is encrypted at rest and only ever returned masked.
+    """
+    try:
+        spec = get_spec(payload.provider)
+    except UnknownProviderError:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{payload.provider}'")
+    base_url = str(payload.base_url).rstrip("/") if payload.base_url else None
+    if spec.requires_base_url and not base_url:
+        raise HTTPException(status_code=400, detail=f"{spec.label} needs a base_url")
+    if not spec.requires_base_url:
+        base_url = None
+
+    if payload.validate_key:
+        check = await verify_provider_key(spec.name, payload.key, base_url, factory=factory)
+        if not check.valid:
+            raise HTTPException(status_code=502 if check.unreachable else 400, detail=check.detail)
+
+    pk = save_provider_key(session, user.id, spec.name, encrypt_key(payload.key), base_url)
     session.commit()
-    return {"id": pk.id, "provider": pk.provider}
+    return _out(pk)
 
 
-@router.get("/provider-keys", response_model=list)
+@router.get("/api/provider-keys", response_model=list[ProviderKeyOut])
+@router.get("/provider-keys", response_model=list[ProviderKeyOut], include_in_schema=False)
 def get_provider_keys(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
-    """List all provider keys with masked values."""
-    return [
-        {"id": pk.id, "provider": pk.provider, "masked_key": masked_value(pk)}
-        for pk in list_provider_keys(session, user.id)
-    ]
+    """List the user's provider keys with masked values."""
+    return [_out(pk) for pk in list_provider_keys(session, user.id)]
 
 
-@router.delete("/provider-keys/{key_id}")
+@router.post("/api/provider-keys/{provider}/validate", response_model=ValidationOut)
+async def validate_stored_key(
+    provider: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+    factory: ProviderFactory = Depends(get_provider_factory),
+):
+    """Check that the user's stored key for a provider still works."""
+    pk = get_provider_key(session, user.id, provider)
+    if pk is None:
+        raise HTTPException(status_code=404, detail="Provider key not found")
+    check = await verify_provider_key(provider, decrypt_key(pk.encrypted_key), pk.base_url, factory=factory)
+    return ValidationOut(valid=check.valid, detail=check.detail)
+
+
+@router.delete("/api/provider-keys/{key_id}")
+@router.delete("/provider-keys/{key_id}", include_in_schema=False)
 def delete_provider_key_endpoint(
     key_id: int,
     user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
     """Delete a specific provider key by ID."""
-    success = delete_provider_key(session, user.id, key_id)
-    if not success:
+    if not delete_provider_key(session, user.id, key_id):
         raise HTTPException(status_code=404, detail="Provider key not found")
     session.commit()
     return {"detail": "Provider key deleted"}

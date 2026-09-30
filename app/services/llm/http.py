@@ -1,0 +1,65 @@
+"""Shared HTTP helpers for adapters that speak to providers over raw HTTP."""
+
+from __future__ import annotations
+
+import json
+from typing import AsyncIterator
+
+import httpx
+
+from app.core.config import settings
+from app.services.llm.base import ProviderError
+
+
+def make_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=settings.llm_timeout_seconds, transport=transport)
+
+
+def _error_text(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text[:300]
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict):
+        return str(error.get("message") or error)[:300]
+    if isinstance(error, str):
+        return error[:300]
+    if isinstance(body, dict) and "message" in body:
+        return str(body["message"])[:300]
+    return str(body)[:300]
+
+
+async def raise_for_status(response: httpx.Response, provider: str) -> None:
+    if response.status_code < 400:
+        return
+    await response.aread()
+    raise ProviderError(
+        f"{provider} returned HTTP {response.status_code}: {_error_text(response)}",
+        status_code=response.status_code,
+    )
+
+
+async def iter_sse_json(response: httpx.Response) -> AsyncIterator[dict]:
+    """Yield the JSON payload of each `data:` line of a server-sent event stream.
+
+    Stops at the OpenAI-style `[DONE]` sentinel. Lines that are not data lines
+    (comments, `event:` names, keep-alives) are skipped.
+    """
+    async for line in response.aiter_lines():
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:"):].strip()
+        if not data:
+            continue
+        if data == "[DONE]":
+            return
+        try:
+            yield json.loads(data)
+        except ValueError:
+            continue
+
+
+def transport_error(provider: str, exc: httpx.HTTPError) -> ProviderError:
+    # The exception type is enough; its text can include the request URL.
+    return ProviderError(f"Could not reach {provider} ({type(exc).__name__})")

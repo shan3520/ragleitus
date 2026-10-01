@@ -25,13 +25,17 @@ interface UploadResult {
 
 function DocumentRow({ doc, onChanged }: { doc: DocumentSummary; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function act(action: "reindex" | "delete") {
     if (action === "delete" && !window.confirm(`Delete "${doc.title}"? Its chunks and vectors are removed too.`)) return;
     setBusy(true);
+    setError(null);
     try {
       await (action === "reindex" ? api.reindexDocument(doc.id) : api.deleteDocument(doc.id));
       onChanged();
+    } catch (err) {
+      setError(`Could not ${action === "reindex" ? "re-index" : "delete"}: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -46,6 +50,11 @@ function DocumentRow({ doc, onChanged }: { doc: DocumentSummary; onChanged: () =
       </TD>
       <TD>
         <DocumentStatusBadge status={doc.status} />
+        {error && (
+          <p role="alert" className="mt-1 text-xs text-destructive">
+            {error}
+          </p>
+        )}
       </TD>
       <TD className="text-right">
         <div className="flex justify-end gap-1">
@@ -74,13 +83,13 @@ export default function DocumentsPage() {
   const [results, setResults] = useState<UploadResult[]>([]);
   const inProgress = documents.data?.some((d) => isInProgress(d.status)) ?? false;
 
-  // While anything is indexing, refresh the list until it settles.
-  const { reload } = documents;
+  // While anything is indexing, refresh the list until it settles (not while requests fail).
+  const { reload, error: loadError } = documents;
   useEffect(() => {
-    if (!inProgress) return;
+    if (!inProgress || loadError) return;
     const timer = window.setInterval(() => void reload(), POLL_MS);
     return () => window.clearInterval(timer);
-  }, [inProgress, reload]);
+  }, [inProgress, reload, loadError]);
 
   async function upload(files: File[]) {
     setUploading(true);

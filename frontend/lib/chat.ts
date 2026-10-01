@@ -1,4 +1,4 @@
-import { API_PREFIX, ApiError, Citation, errorMessage, Message, Source, tokenStore, TurnDone } from "./api";
+import { API_PREFIX, ApiError, Citation, errorMessage, Message, reportStatus, Source, tokenStore, TurnDone } from "./api";
 import type { ChatItem } from "@/components/chat/message-view";
 import { readSse } from "./sse";
 
@@ -44,6 +44,7 @@ export async function streamMessage(
     throw new ApiError(0, errorMessage(0, null));
   }
 
+  reportStatus(response.status, Boolean(token));
   if (!response.ok || !response.body) {
     let payload: unknown = null;
     try {

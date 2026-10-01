@@ -2,7 +2,7 @@
  * Typed client for the RAGForge API.
  *
  * Requests go to `/backend/...` on the same origin; the route handler in
- * `src/app/backend/[...path]/route.ts` forwards them to the FastAPI server.
+ * `app/backend/[...path]/route.ts` forwards them to the FastAPI server.
  * The access token is attached from `tokenStore`.
  */
 
@@ -263,6 +263,11 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
 
+/** For requests made outside `request()` (streaming): report a 401 the same way. */
+export function reportStatus(status: number, sentToken: boolean) {
+  if (status === 401 && sentToken) onUnauthorized?.();
+}
+
 // ---------------------------------------------------------------- request
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -280,7 +285,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     throw new ApiError(0, errorMessage(0, null));
   }
 
-  if (response.status === 401 && token) onUnauthorized?.();
+  reportStatus(response.status, Boolean(token));
   if (!response.ok) {
     let body: unknown = null;
     try {
@@ -305,8 +310,14 @@ export const api = {
   login: (username: string, password: string) =>
     request<{ access_token: string }>("/auth/login", { method: "POST", body: json({ username, password }) }),
   me: () => request<User>("/auth/me"),
-  changePassword: (current_password: string, new_password: string) =>
-    request<void>("/auth/me/password", { method: "PATCH", body: json({ current_password, new_password }) }),
+  /** The server signs out every other session; keep this one going with the token it returns. */
+  changePassword: async (current_password: string, new_password: string) => {
+    const { access_token } = await request<{ access_token: string }>("/auth/me/password", {
+      method: "PATCH",
+      body: json({ current_password, new_password }),
+    });
+    tokenStore.set(access_token);
+  },
 
   providers: () => request<Provider[]>("/api/providers"),
   providerKeys: () => request<ProviderKey[]>("/api/provider-keys"),

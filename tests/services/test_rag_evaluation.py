@@ -106,3 +106,23 @@ def test_list_evaluations_with_averages(env):
     assert averages["context_recall"] is None
     assert items[0].faithfulness == 0.5
     assert rag_evaluation.list_evaluations(session, make_user(session).id)[1] == 0
+
+
+def test_history_gives_conversation_ids_without_loading_answer_text(env):
+    from sqlalchemy import inspect
+
+    from app.models.answer_evaluation import AnswerEvaluation
+
+    session, user_id, _, answer = env
+    session.add(AnswerEvaluation(
+        user_id=user_id, message_id=answer.id, judge_provider="openai", judge_model="m",
+        faithfulness=1, answer_relevancy=1, context_precision=1, hallucination=0,
+    ))
+    session.commit()
+    conversation_id = answer.conversation_id
+    session.expunge_all()
+
+    items, _, _ = rag_evaluation.list_evaluations(session, user_id)
+    assert items[0].conversation_id == conversation_id
+    unloaded = inspect(items[0].message).unloaded
+    assert {"content", "context"} <= unloaded

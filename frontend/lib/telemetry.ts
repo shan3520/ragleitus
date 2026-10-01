@@ -12,16 +12,21 @@ export interface DayPoint {
 
 const DAY_MS = 86_400_000;
 
+const startOfUtcDay = (t: number) => t - (((t % DAY_MS) + DAY_MS) % DAY_MS);
+
 /**
- * One point per calendar day in the window, oldest first. The API only
- * returns days that had calls; missing days are zero so the axis is honest.
+ * One point per UTC calendar day in the window, oldest first. The API counts
+ * calls from exactly `days` x 24h ago, so the window touches `days + 1`
+ * calendar dates (the oldest one partly); every one of them is drawn, so the
+ * bars add up to the totals above them. Days without calls are zero.
  */
 export function fillDays(daily: TelemetrySummary["daily"], days: number, now: Date = new Date()): DayPoint[] {
   const byDate = new Map(daily.map((d) => [d.date, d]));
-  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const first = startOfUtcDay(now.getTime() - days * DAY_MS);
+  const today = startOfUtcDay(now.getTime());
   const points: DayPoint[] = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const date = new Date(today - i * DAY_MS).toISOString().slice(0, 10);
+  for (let t = first; t <= today; t += DAY_MS) {
+    const date = new Date(t).toISOString().slice(0, 10);
     const d = byDate.get(date);
     const requests = d?.requests ?? 0;
     const errors = d?.errors ?? 0;

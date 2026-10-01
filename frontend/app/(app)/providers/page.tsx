@@ -125,6 +125,8 @@ function KeyRow({ keyInfo, label, onChanged }: { keyInfo: ProviderKey; label: st
     try {
       await api.deleteProviderKey(keyInfo.id);
       onChanged();
+    } catch (err) {
+      setStatus({ valid: false, detail: `Could not delete: ${err instanceof Error ? err.message : String(err)}` });
     } finally {
       setBusy(null);
     }

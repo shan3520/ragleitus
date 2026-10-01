@@ -9,20 +9,21 @@ export const METRIC_LABELS: Record<string, string> = {
   hallucination: "Hallucination",
 };
 
+export const METRICS = ["faithfulness", "answer_relevancy", "context_precision", "context_recall", "hallucination"] as const;
+
 /** Higher is better for every metric except hallucination. */
 export function scoreTone(metric: string, value: number): "good" | "ok" | "bad" {
   const v = metric === "hallucination" ? 1 - value : value;
   return v >= 0.8 ? "good" : v >= 0.5 ? "ok" : "bad";
 }
 
-const TONE_CLASS = { good: "text-success", ok: "text-foreground", bad: "text-destructive" };
+export const TONE_CLASS = { good: "text-success", ok: "text-foreground", bad: "text-destructive" };
 
 export function EvaluationScores({ evaluation, compact = false }: { evaluation: Evaluation; compact?: boolean }) {
-  const metrics = ["faithfulness", "answer_relevancy", "context_precision", "context_recall", "hallucination"] as const;
   return (
     <div className={cn("flex flex-col gap-2", compact && "gap-1")}>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
-        {metrics.map((m) => {
+        {METRICS.map((m) => {
           const value = evaluation[m];
           return (
             <div key={m} className="flex flex-col">

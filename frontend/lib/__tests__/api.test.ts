@@ -85,3 +85,20 @@ describe("api.health", () => {
     await expect(api.health()).rejects.toMatchObject({ status: 502 });
   });
 });
+
+describe("api.changePassword", () => {
+  it("keeps the session going with the token the server returns", async () => {
+    tokenStore.set("old-token");
+    const fetchMock = mockFetch(200, { access_token: "new-token", token_type: "bearer" });
+    await api.changePassword("old password", "new password 1");
+    expect(new Headers(fetchMock.mock.calls[0][1]!.headers).get("Authorization")).toBe("Bearer old-token");
+    expect(tokenStore.get()).toBe("new-token");
+  });
+
+  it("keeps the old token when the change is refused", async () => {
+    tokenStore.set("old-token");
+    mockFetch(400, { detail: "Current password is incorrect" });
+    await expect(api.changePassword("wrong", "new password 1")).rejects.toThrow("Current password is incorrect");
+    expect(tokenStore.get()).toBe("old-token");
+  });
+});

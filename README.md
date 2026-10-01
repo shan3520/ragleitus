@@ -232,12 +232,13 @@ npm run lint && npm run typecheck && npm test   # unit tests: Jest, no server ne
 The end-to-end tests drive a real browser through sign-up, adding a key,
 uploading the samples, a cited answer, evaluation, telemetry and a password
 change. They use a stub OpenAI-compatible LLM (`frontend/e2e/stub-llm.mjs`, key
-`stub-key`), so no real key is needed. Start the API with the fake embedder and
-a high rate limit, then build and run the suite:
+`stub-key`), so no real key is needed. Start the API with the fake embedder, a
+high rate limit, and private provider URLs allowed (the stub runs on
+localhost), then build and run the suite:
 
 ```bash
 # terminal 1, repository root
-EMBEDDING_BACKEND=fake RATE_LIMIT_BURST=1000 uvicorn app.main:app
+EMBEDDING_BACKEND=fake RATE_LIMIT_BURST=1000 ALLOW_PRIVATE_PROVIDER_URLS=true uvicorn app.main:app
 
 # terminal 2
 cd frontend
@@ -248,7 +249,8 @@ npm run build && npm run e2e      # starts the stub LLM and the web app itself
 Against the Docker Compose stack instead, point the suite at it and let the API
 container reach the stub on the host:
 `E2E_BASE_URL=http://localhost:3000 E2E_LLM_URL=http://host.docker.internal:9999/v1 npm run e2e`
-(the `api` service needs `extra_hosts: ["host.docker.internal:host-gateway"]` on Linux).
+(the `api` service needs `ALLOW_PRIVATE_PROVIDER_URLS: "true"`, a high
+`RATE_LIMIT_BURST`, and `extra_hosts: ["host.docker.internal:host-gateway"]` on Linux).
 
 ## What is not done yet
 

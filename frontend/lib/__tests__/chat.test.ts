@@ -1,4 +1,4 @@
-import { ApiError } from "../api";
+import { ApiError, setUnauthorizedHandler, tokenStore } from "../api";
 import { streamMessage } from "../chat";
 
 function sseResponse(body: string, status = 200) {
@@ -55,4 +55,20 @@ it("throws when the provider fails mid-stream", async () => {
     message: "openai returned HTTP 429",
   });
   expect(tokens).toEqual(["Part"]);
+});
+
+it("signs the user out when the stream is refused with 401", async () => {
+  tokenStore.set("expired-token");
+  const onUnauthorized = jest.fn();
+  setUnauthorizedHandler(onUnauthorized);
+  jest.spyOn(global, "fetch").mockResolvedValue(
+    new Response(JSON.stringify({ detail: "Could not validate credentials" }), { status: 401 }),
+  );
+  try {
+    await expect(streamMessage(5, { content: "Hi" }, {})).rejects.toMatchObject({ status: 401 });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  } finally {
+    setUnauthorizedHandler(null);
+    tokenStore.clear();
+  }
 });

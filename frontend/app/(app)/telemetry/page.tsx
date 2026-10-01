@@ -59,11 +59,11 @@ export default function TelemetryPage() {
           {s.requests === 0 ? (
             <Card>
               <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                No LLM calls in the last {days} days. Ask a question in Chat to see numbers here.
+                No LLM calls in the last {s.days} days. Ask a question in Chat to see numbers here.
               </CardContent>
             </Card>
           ) : (
-            <TelemetryCharts points={fillDays(s.daily, days)} unpriced={s.unpriced_requests} />
+            <TelemetryCharts points={fillDays(s.daily, s.days)} unpriced={s.unpriced_requests} />
           )}
 
           {s.by_model.length > 0 && (

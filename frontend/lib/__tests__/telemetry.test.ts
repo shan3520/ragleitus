@@ -13,12 +13,19 @@ const bucket = (date: string, requests: number, errors: number, cost: number) =>
 describe("fillDays", () => {
   const now = new Date("2026-09-30T15:00:00Z");
 
-  it("returns one point per day, oldest first, ending today", () => {
+  it("covers every date the API's window touches, oldest first, ending today", () => {
+    // 7 x 24h before 2026-09-30T15:00Z is 2026-09-23T15:00Z, so the 23rd is partly in the window.
     const points = fillDays([], 7, now);
-    expect(points).toHaveLength(7);
-    expect(points[0].date).toBe("2026-09-24");
-    expect(points[6].date).toBe("2026-09-30");
+    expect(points).toHaveLength(8);
+    expect(points[0].date).toBe("2026-09-23");
+    expect(points[7].date).toBe("2026-09-30");
     expect(points.every((p) => p.requests === 0 && p.cost === 0)).toBe(true);
+  });
+
+  it("draws the calls from the partial oldest day, so bars add up to the totals", () => {
+    const daily = [bucket("2026-09-23", 1, 0, 0.5), bucket("2026-09-30", 2, 0, 0.5)];
+    const total = fillDays(daily, 7, now).reduce((sum, p) => sum + p.requests, 0);
+    expect(total).toBe(3);
   });
 
   it("places reported days and splits ok from errors", () => {

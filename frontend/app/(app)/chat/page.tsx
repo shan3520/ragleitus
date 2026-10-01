@@ -85,10 +85,13 @@ function ChatWorkspace() {
 
     const controller = new AbortController();
     abort.current = controller;
+    // False once the user opens another conversation: this turn must then leave the screen alone.
+    const stillShown = () => abort.current === controller;
     try {
       let id = conversationId;
       if (!id) {
         const created = await api.createConversation({ provider: provider || undefined, model: model || undefined });
+        if (!stillShown()) return;
         id = created.id;
         createdHere.current = id;
         setUrl(id);
@@ -117,26 +120,39 @@ function ChatWorkspace() {
         controller.signal,
       );
     } catch (err) {
-      const stopped = (err as Error).name === "AbortError";
-      updateLast((it) => ({ ...it, error: stopped ? "Stopped." : err instanceof Error ? err.message : String(err) }));
+      if (stillShown()) {
+        const stopped = (err as Error).name === "AbortError";
+        updateLast((it) => ({ ...it, error: stopped ? "Stopped." : err instanceof Error ? err.message : String(err) }));
+      }
     } finally {
-      updateLast((it) => ({ ...it, streaming: false }));
+      if (stillShown()) {
+        updateLast((it) => ({ ...it, streaming: false }));
+        abort.current = null;
+      }
       setStreaming(false);
-      abort.current = null;
       void conversations.reload();
     }
   }
 
   function openConversation(id: number | null) {
-    if (streaming) abort.current?.abort();
+    // Stop the answer in progress and detach it from the screen (see stillShown in send).
+    abort.current?.abort();
+    abort.current = null;
     createdHere.current = null;
     setLoadError(null);
+    // The load effect only runs when the URL changes; "New chat" from an unsaved chat doesn't change it.
+    if (id === null) setItems([]);
     setUrl(id);
   }
 
   async function removeConversation(id: number) {
     if (!window.confirm("Delete this conversation?")) return;
-    await api.deleteConversation(id);
+    try {
+      await api.deleteConversation(id);
+    } catch (err) {
+      setLoadError(`Could not delete the conversation: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     if (id === conversationId) openConversation(null);
     void conversations.reload();
   }

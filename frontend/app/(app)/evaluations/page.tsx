@@ -3,7 +3,7 @@
 import Link from "next/link";
 
 import { Page, PageHeader } from "@/components/app-shell";
-import { METRIC_LABELS, scoreTone } from "@/components/chat/evaluation-scores";
+import { METRIC_LABELS, METRICS, scoreTone, TONE_CLASS } from "@/components/chat/evaluation-scores";
 import { StatTile } from "@/components/stat-tile";
 import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,9 +12,6 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { api, type Evaluation } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import { cn, formatDate, formatPercent } from "@/lib/utils";
-
-const METRICS = ["faithfulness", "answer_relevancy", "context_precision", "context_recall", "hallucination"] as const;
-const TONE_CLASS = { good: "text-success", ok: "", bad: "text-destructive" };
 
 function Score({ metric, value }: { metric: string; value: number | null }) {
   if (value === null) return <span className="text-muted-foreground">n/a</span>;

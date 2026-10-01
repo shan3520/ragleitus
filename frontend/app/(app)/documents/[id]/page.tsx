@@ -37,12 +37,13 @@ export default function DocumentDetailPage() {
   const doc = useApi(() => api.document(documentId), [documentId]);
   const status = doc.data?.status;
 
-  const { reload } = doc;
+  // Poll while indexing, but not once requests fail (deleted elsewhere, or the API is down).
+  const { reload, error: loadError } = doc;
   useEffect(() => {
-    if (!status || !isInProgress(status)) return;
+    if (!status || !isInProgress(status) || loadError) return;
     const timer = window.setInterval(() => void reload(), 2000);
     return () => window.clearInterval(timer);
-  }, [status, reload]);
+  }, [status, reload, loadError]);
 
   // Citations link here as #chunk-<id>; highlight that passage and scroll to it once it exists.
   const cited = useHash().slice(1);

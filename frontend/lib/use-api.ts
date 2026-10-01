@@ -17,9 +17,13 @@ const message = (err: unknown) => (err instanceof Error ? err.message : String(e
  * While a refresh runs, the previous data stays on screen.
  */
 export function useApi<T>(load: () => Promise<T>, key: unknown[] = []): ApiState<T> {
+  const keyId = JSON.stringify(key);
   const [data, setData] = useState<T>();
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // The key whose request last finished. While it differs from the current
+  // key, a request for the new key is in flight: that is "loading".
+  const [settledKey, setSettledKey] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
   const latest = useRef(0);
   const loadRef = useRef(load);
 
@@ -27,7 +31,7 @@ export function useApi<T>(load: () => Promise<T>, key: unknown[] = []): ApiState
     loadRef.current = load;
   });
 
-  const run = useCallback(async (call: number) => {
+  const run = useCallback(async (call: number, id: string) => {
     try {
       const result = await loadRef.current();
       if (call === latest.current) {
@@ -37,20 +41,21 @@ export function useApi<T>(load: () => Promise<T>, key: unknown[] = []): ApiState
     } catch (err) {
       if (call === latest.current) setError(message(err));
     } finally {
-      if (call === latest.current) setLoading(false);
+      if (call === latest.current) {
+        setSettledKey(id);
+        setReloading(false);
+      }
     }
   }, []);
 
   const reload = useCallback(async () => {
-    setLoading(true);
-    await run(++latest.current);
-  }, [run]);
+    setReloading(true);
+    await run(++latest.current, keyId);
+  }, [run, keyId]);
 
   useEffect(() => {
-    void run(++latest.current);
-    // `key` is the caller's dependency list.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, key);
+    void run(++latest.current, keyId);
+  }, [run, keyId]);
 
-  return { data, error, loading, reload };
+  return { data, error, loading: reloading || settledKey !== keyId, reload };
 }

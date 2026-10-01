@@ -50,7 +50,7 @@ python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env            # fill in JWT_SECRET and PROVIDER_KEY_SECRET
 alembic upgrade head
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --no-proxy-headers
 ```
 
 To try it offline, set `EMBEDDING_BACKEND=fake` in `.env`. That uses a hashing
@@ -173,6 +173,24 @@ lists them all. Only these are required:
 `postgresql+psycopg://user:pass@host/db`. `VECTOR_STORE_URL` takes a Qdrant URL,
 a local directory, or `:memory:`.
 
+Rate limiting (`RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_BURST`) counts signed-in
+requests per user and other requests (login, register) per client address.
+`X-Forwarded-For` and `X-Forwarded-Proto` are only believed from the reverse
+proxies listed in `TRUSTED_PROXIES`; otherwise the connecting address is used.
+Login attempts are also limited per account (`LOGIN_ATTEMPTS_PER_MINUTE`,
+default 10), whatever address they claim to come from.
+
+`docker compose` gives the web container a fixed address and trusts it, so
+signed-out visitors get their own limits. The web app passes on an
+`X-Forwarded-For` the browser sent itself, so that address can be forged; the
+per-account login limit is what stops password guessing. With a reverse proxy
+(nginx, a load balancer) in front of the web app, add its address to
+`TRUSTED_PROXIES` together with the web container's.
+
+Run uvicorn with `--no-proxy-headers` (the Docker image does). Without it,
+uvicorn itself replaces the client address with the `X-Forwarded-For` value for
+connections from `127.0.0.1`, before the app can check it.
+
 Self-hosted providers (Ollama, LM Studio, vLLM) are added as `custom` with a
 base URL. The server calls that URL, so by default it must be a public address;
 set `ALLOW_PRIVATE_PROVIDER_URLS=true` to allow localhost, your LAN or other
@@ -238,7 +256,7 @@ localhost), then build and run the suite:
 
 ```bash
 # terminal 1, repository root
-EMBEDDING_BACKEND=fake RATE_LIMIT_BURST=1000 ALLOW_PRIVATE_PROVIDER_URLS=true uvicorn app.main:app
+EMBEDDING_BACKEND=fake RATE_LIMIT_BURST=1000 ALLOW_PRIVATE_PROVIDER_URLS=true uvicorn app.main:app --no-proxy-headers
 
 # terminal 2
 cd frontend

@@ -18,6 +18,8 @@ def _get_authenticated_client(username: str):
 
 
 def test_evaluations_summary_endpoint():
+    from tests.helpers import user_id_for
+
     unique_user = f"eval_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
 
@@ -25,7 +27,7 @@ def test_evaluations_summary_endpoint():
     db = next(db_gen)
     exp_name = f"Exp_{uuid.uuid4().hex[:6]}"
     try:
-        exp = Experiment(name=exp_name)
+        exp = Experiment(name=exp_name, user_id=user_id_for(unique_user))
         db.add(exp)
         db.flush()
 
@@ -42,6 +44,10 @@ def test_evaluations_summary_endpoint():
     assert exp_name in data
     assert data[exp_name]["count"] == 2
     assert data[exp_name]["mean"] == 0.9
+
+    # Another user does not see it.
+    _, other_headers = _get_authenticated_client(f"eval_other_{uuid.uuid4().hex[:8]}")
+    assert exp_name not in client.get("/api/evaluations/summary", headers=other_headers).json()
 
 
 def test_evaluate_a_chat_answer_end_to_end():

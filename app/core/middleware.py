@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.core.client_identity import rate_limit_key
 from app.core.config import settings
 from app.core.rate_limit import RateLimiter
 
@@ -21,6 +22,21 @@ rate_limiter = RateLimiter(
     rate=settings.rate_limit_per_minute / 60.0,
     capacity=settings.rate_limit_burst,
 )
+
+# Login attempts per account (see allow_login_attempt).
+login_rate_limiter = RateLimiter(
+    rate=settings.login_attempts_per_minute / 60.0,
+    capacity=settings.login_attempts_burst,
+)
+
+
+def allow_login_attempt(username: str) -> bool:
+    """Count a login attempt for this username; False once its allowance is used up.
+
+    Keyed by account, not address, so guessing one user's password is bounded
+    however many addresses (or forged X-Forwarded-For values) the guesses come from.
+    """
+    return login_rate_limiter.allow(f"login:{username.strip().lower()}")
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -68,16 +84,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path in ("/docs", "/redoc", "/openapi.json"):
             return await call_next(request)
 
-        # Identify client key by IP or forwarding header
-        client_ip = (
-            request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        # The signed-in user, or the client address (X-Forwarded-For only from trusted proxies).
+        key = rate_limit_key(request)
 
-        if not rate_limiter.allow(client_ip):
+        if not rate_limiter.allow(key):
             logger.warning(
                 "Rate limit exceeded",
-                extra={"client_ip": client_ip, "path": path},
+                extra={"client": key, "path": path},
             )
             return JSONResponse(
                 status_code=429,

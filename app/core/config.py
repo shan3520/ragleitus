@@ -5,6 +5,7 @@ refuses to start without them rather than signing tokens or encrypting
 provider keys with a guessable value.
 """
 
+import ipaddress
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -48,6 +49,14 @@ class Settings(BaseSettings):
     # HTTP
     rate_limit_per_minute: int = 60
     rate_limit_burst: int = 20
+    # Login attempts per username, whatever address they come from: the guard
+    # against password guessing that a spoofed X-Forwarded-For cannot get around.
+    login_attempts_per_minute: int = 10
+    login_attempts_burst: int = 10
+    # Addresses (IPs or CIDRs) of reverse proxies allowed to report the client
+    # address in X-Forwarded-For. Empty: the header is ignored, because any
+    # caller can set it.
+    trusted_proxies: Annotated[list[str], NoDecode] = []
     llm_timeout_seconds: float = 120.0
     # Let self-hosted provider URLs point at private addresses (localhost, LAN,
     # Docker services). Off by default: users choose these URLs, and the server
@@ -56,11 +65,22 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "trusted_proxies", mode="before")
     @classmethod
     def _split_origins(cls, value):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _check_proxies(cls, value: list[str]) -> list[str]:
+        for entry in value:
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                raise ValueError(f"TRUSTED_PROXIES: {entry!r} is not an IP address or network") from None
         return value
 
 

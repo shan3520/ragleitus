@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.middleware import allow_login_attempt
 from app.db.database import get_db
 from app.models.user import User
 from app.services import auth_service
@@ -50,6 +51,12 @@ def register(req: RegisterRequest, session: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest, session: Session = Depends(get_db)):
+    if not allow_login_attempt(req.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts for this account. Try again in a minute.",
+            headers={"Retry-After": "60"},
+        )
     try:
         user = auth_service.authenticate(session, req.username, req.password)
     except auth_service.InvalidCredentialsError:

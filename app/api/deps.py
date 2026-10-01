@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.models.user import User
+from app.core.security import bearer_token
 from app.services.auth_service import InvalidTokenError, get_user_from_token
 from app.services.llm import ProviderFactory, create_provider
 
@@ -23,11 +24,11 @@ def get_current_user(
 ) -> User:
     if not authorization:
         raise _unauthorized("Missing authorization header")
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
+    token = bearer_token(authorization)
+    if token is None:
         raise _unauthorized("Invalid authorization header")
     try:
-        return get_user_from_token(session, token.strip())
+        return get_user_from_token(session, token)
     except InvalidTokenError:
         raise _unauthorized("Invalid or expired token")
 

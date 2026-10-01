@@ -77,3 +77,27 @@ def test_change_password():
 
     assert client.post("/auth/login", json={"username": "changer", "password": "password123"}).status_code == 401
     assert client.post("/auth/login", json={"username": "changer", "password": "newpassword1"}).status_code == 200
+
+
+def test_login_attempts_are_limited_per_account():
+    from app.core.middleware import login_rate_limiter, rate_limiter
+
+    login_rate_limiter.reset()
+    rate_limiter.reset()
+    client.post("/auth/register", json={"username": "guessed", "password": "password123"})
+    client.post("/auth/register", json={"username": "bystander", "password": "password123"})
+
+    attempts = [
+        # Each guess claims a different address; the limit is per account, so that does not help.
+        client.post("/auth/login", json={"username": "Guessed", "password": f"wrong-{i}"},
+                    headers={"X-Forwarded-For": f"198.51.100.{i}"}).status_code
+        for i in range(login_rate_limiter.capacity + 1)
+    ]
+    assert attempts[:-1] == [401] * login_rate_limiter.capacity
+    assert attempts[-1] == 429
+    # Even the right password waits until the account's allowance refills...
+    assert client.post("/auth/login", json={"username": "guessed", "password": "password123"}).status_code == 429
+    # ...while other accounts are unaffected.
+    assert client.post("/auth/login", json={"username": "bystander", "password": "password123"}).status_code == 200
+    login_rate_limiter.reset()
+    rate_limiter.reset()

@@ -27,4 +27,7 @@ ENV EMBEDDING_CACHE_DIR=/data/models
 EXPOSE 8000
 
 ENTRYPOINT ["entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --no-proxy-headers: uvicorn would otherwise rewrite the client address from
+# X-Forwarded-For before the app sees it. The app decides which proxies to
+# believe itself (TRUSTED_PROXIES).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]

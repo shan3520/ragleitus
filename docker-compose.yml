@@ -30,6 +30,9 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://ragforge:${POSTGRES_PASSWORD}@postgres:5432/ragforge
       VECTOR_STORE_URL: http://qdrant:6333
+      # The web container (fixed address below) relays the client address for
+      # signed-out requests. If you set TRUSTED_PROXIES in .env, include it.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-${RAGFORGE_WEB_IP:-172.30.231.10}}
     ports:
       - "8000:8000"
     volumes:
@@ -45,8 +48,19 @@ services:
       timeout: 5s
       retries: 12
 
+  # Rate limits: signed-in requests count per user. Signed-out ones (login,
+  # register) count per client address, which the api takes from the
+  # X-Forwarded-For the web container passes on, because web is listed in
+  # TRUSTED_PROXIES above. Next.js passes on a header the browser sent itself,
+  # so that address is not proof of anything; logins are also limited per
+  # account (LOGIN_ATTEMPTS_PER_MINUTE), which a forged header cannot get
+  # around. With a reverse proxy (nginx, a load balancer) in front of web that
+  # sets X-Forwarded-For, list it in TRUSTED_PROXIES as well.
   web:
     build: ./frontend
+    networks:
+      default:
+        ipv4_address: ${RAGFORGE_WEB_IP:-172.30.231.10}
     environment:
       # The UI proxies /backend/* to this address from the server side, so the
       # browser never needs to reach the API directly.
@@ -56,6 +70,14 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+networks:
+  default:
+    ipam:
+      config:
+        # Fixed so the web container has a known address to trust. Change both
+        # RAGFORGE_SUBNET and RAGFORGE_WEB_IP if this range is taken on your host.
+        - subnet: ${RAGFORGE_SUBNET:-172.30.231.0/24}
 
 volumes:
   postgres-data:

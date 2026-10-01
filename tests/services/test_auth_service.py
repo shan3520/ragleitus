@@ -120,3 +120,4 @@ def test_tokens_without_a_version_work_until_the_first_password_change(session):
     auth_service.change_password(session, user, "correct horse", "new password")
     with pytest.raises(auth_service.InvalidTokenError):
         auth_service.get_user_from_token(session, legacy)
+

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
 
 from .evaluation import Base
 
@@ -31,6 +32,12 @@ class AnswerEvaluation(Base):
     rouge_l = Column(Float, nullable=True)
     context_overlap = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    message = relationship("Message")
+
+    @property
+    def conversation_id(self) -> int | None:
+        return self.message.conversation_id if self.message is not None else None
 
 
 __all__ = ["AnswerEvaluation"]

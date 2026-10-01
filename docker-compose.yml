@@ -1,7 +1,8 @@
-# Starts the API with PostgreSQL and Qdrant.
+# Starts the web UI and the API with PostgreSQL and Qdrant.
 #   cp .env.example .env   # then fill in the secrets
 #   docker compose up --build
-# The API listens on http://localhost:8000 (Swagger UI at /docs).
+# Open http://localhost:3000. The API also listens on http://localhost:8000
+# (Swagger UI at /docs).
 
 services:
   postgres:
@@ -43,6 +44,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+
+  web:
+    build: ./frontend
+    environment:
+      # The UI proxies /backend/* to this address from the server side, so the
+      # browser never needs to reach the API directly.
+      API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   postgres-data:

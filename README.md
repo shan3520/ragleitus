@@ -1,12 +1,13 @@
 # RAGForge
 
-A backend for Retrieval-Augmented Generation. Upload documents, chat with them
+A workspace for Retrieval-Augmented Generation. Upload documents, chat with them
 using the LLM provider of your choice (bring your own key), get answers with
 page-level citations, and measure latency, token usage, cost and answer quality.
 
-The target design is in [`docs/SPEC.md`](docs/SPEC.md). This repository
-currently ships the **backend** (REST API with Swagger UI). The web frontend is
-not built yet; see [What is not done yet](#what-is-not-done-yet).
+The target design is in [`docs/SPEC.md`](docs/SPEC.md). This repository ships
+the **API** (FastAPI, with Swagger UI) and the **web app** (Next.js, in
+[`frontend/`](frontend)). Some parts of the spec are not built yet; see
+[What is not done yet](#what-is-not-done-yet).
 
 ## What it does
 
@@ -31,8 +32,9 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 docker compose up --build
 ```
 
-This starts PostgreSQL 16, Qdrant and the API. Migrations run automatically.
-Open <http://localhost:8000/docs> for the interactive API.
+This starts PostgreSQL 16, Qdrant, the API and the web app. Migrations run
+automatically. Open <http://localhost:3000>, create an account, add a provider
+key and upload a document. The interactive API is at <http://localhost:8000/docs>.
 
 The first document you upload triggers a one-time download of the embedding
 model (`BAAI/bge-small-en-v1.5`, about 70 MB, from Hugging Face). It is cached in
@@ -55,7 +57,23 @@ To try it offline, set `EMBEDDING_BACKEND=fake` in `.env`. That uses a hashing
 embedder instead of the real model, so retrieval quality is poor, but every
 feature works.
 
+Then start the web app (Node.js 20.9+) in a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev                     # http://localhost:3000, talks to the API on :8000
+```
+
+Set `API_URL` if the API is somewhere else.
+
 ## Walkthrough
+
+In the web app: **Providers** → add a key, **Documents** → upload the files in
+[`samples/`](samples), **Chat** → ask "What does error code E-4711 mean?". The
+answer cites its passages; click a citation to open the passage, or
+**Evaluate answer** to score it. **Telemetry** and **Evaluations** show the
+numbers.
 
 The same flow works in the Swagger UI. With `curl`:
 
@@ -101,7 +119,9 @@ curl -s $API/api/evaluations -H "$AUTH"
 
 ```mermaid
 flowchart LR
-    client[Client / Swagger UI] -->|JWT| api[FastAPI routes<br/>app/api]
+    browser[Browser] --> web[Next.js web app<br/>frontend/]
+    web -->|/backend/* proxy, JWT| api[FastAPI routes<br/>app/api]
+    swagger[Swagger UI / curl] -->|JWT| api
     api --> services[Services<br/>app/services]
     services --> pg[(PostgreSQL<br/>users, documents, chunks,<br/>conversations, telemetry,<br/>evaluations)]
     services --> qdrant[(Qdrant<br/>chunk vectors)]
@@ -130,6 +150,10 @@ flowchart LR
   fails immediately. Chunking and embedding then run as a background task that
   records `pending → indexing → ready | failed`. The cleaned pages are kept, so
   re-indexing never needs the original file.
+- **Web app.** `frontend/` is a Next.js App Router app. The browser only talks to
+  its own origin: a route handler forwards `/backend/*` to `API_URL` at runtime
+  (streaming, so chat tokens arrive as they are generated). No CORS setup is
+  needed, and one build works against any API address.
 - **Provider adapters.** These live in `app/services/llm`: one adapter for the
   OpenAI-compatible family, one for Gemini, and one using the official
   `anthropic` SDK. All stream text and report token usage the same way.
@@ -198,19 +222,47 @@ alembic upgrade head
 
 `tests/test_migrations.py` fails if the migrations and the models ever disagree.
 
+### Frontend
+
+```bash
+cd frontend
+npm run lint && npm run typecheck && npm test   # unit tests: Jest, no server needed
+```
+
+The end-to-end tests drive a real browser through sign-up, adding a key,
+uploading the samples, a cited answer, evaluation, telemetry and a password
+change. They use a stub OpenAI-compatible LLM (`frontend/e2e/stub-llm.mjs`, key
+`stub-key`), so no real key is needed. Start the API with the fake embedder, a
+high rate limit, and private provider URLs allowed (the stub runs on
+localhost), then build and run the suite:
+
+```bash
+# terminal 1, repository root
+EMBEDDING_BACKEND=fake RATE_LIMIT_BURST=1000 ALLOW_PRIVATE_PROVIDER_URLS=true uvicorn app.main:app
+
+# terminal 2
+cd frontend
+npx playwright install chromium   # once
+npm run build && npm run e2e      # starts the stub LLM and the web app itself
+```
+
+Against the Docker Compose stack instead, point the suite at it and let the API
+container reach the stub on the host:
+`E2E_BASE_URL=http://localhost:3000 E2E_LLM_URL=http://host.docker.internal:9999/v1 npm run e2e`
+(the `api` service needs `ALLOW_PRIVATE_PROVIDER_URLS: "true"`, a high
+`RATE_LIMIT_BURST`, and `extra_hosts: ["host.docker.internal:host-gateway"]` on Linux).
+
 ## What is not done yet
 
-`docs/SPEC.md` describes more than this backend. Still to build:
+`docs/SPEC.md` describes more than this. Still to build:
 
-- **Frontend.** The Next.js app (dashboard, chat, documents, providers, prompt
-  library, experiments, telemetry, evaluations, settings pages). The API is ready
-  for it.
 - **Task queue.** Indexing runs as an in-process background task. Moving it to
   Celery + Redis means wrapping `app.services.ingestion.index_document`, which
   already opens its own session. Until then, an API restart during indexing
   leaves the document `pending` or `indexing`, and `POST .../reindex` recovers it.
 - **Prompt library and experiments.** Saving and versioning prompts, and
-  comparing prompts, models or retrieval strategies side by side.
+  comparing prompts, models or retrieval strategies side by side, in the API and
+  as pages in the web app.
 - **Observability stack.** No Langfuse, OpenTelemetry, Prometheus or Grafana.
   Telemetry is stored in PostgreSQL and served by the API.
 - **Evaluation frameworks.** No Ragas or DeepEval. Evaluation uses its own LLM

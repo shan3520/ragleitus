@@ -57,6 +57,7 @@ class EvaluationOut(BaseModel):
 
     id: int
     message_id: int
+    conversation_id: int | None
     judge_provider: str
     judge_model: str
     faithfulness: float

@@ -66,6 +66,7 @@ def test_evaluate_a_chat_answer_end_to_end():
     assert body["faithfulness"] == 1.0
     assert body["hallucination"] == 0.0
     assert body["context_recall"] is None
+    assert body["conversation_id"] == conversation_id
 
     history = client.get(f"/api/evaluations?conversation_id={conversation_id}", headers=headers).json()
     assert history["total"] == 1

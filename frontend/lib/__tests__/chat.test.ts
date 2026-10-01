@@ -1,5 +1,5 @@
 import { ApiError, setUnauthorizedHandler, tokenStore } from "../api";
-import { streamMessage } from "../chat";
+import { streamMessage, toChatItems } from "../chat";
 
 function sseResponse(body: string, status = 200) {
   return new Response(body, { status, headers: { "Content-Type": "text/event-stream" } });
@@ -71,4 +71,30 @@ it("signs the user out when the stream is refused with 401", async () => {
     setUnauthorizedHandler(null);
     tokenStore.clear();
   }
+});
+
+describe("toChatItems", () => {
+  const message = (id: number, role: "user" | "assistant") => ({
+    id, role, content: `m${id}`, citations: null, provider: null, model: null, prompt_tokens: null,
+    completion_tokens: null, latency_ms: null, finish_reason: null, created_at: "",
+  });
+  const evaluation = (id: number, message_id: number, faithfulness: number) => ({
+    id, message_id, conversation_id: 1, judge_provider: "openai", judge_model: "m", faithfulness,
+    answer_relevancy: 1, context_precision: 1, context_recall: null, hallucination: 1 - faithfulness,
+    rationale: null, reference_answer: null, rouge_l: null, context_overlap: null, created_at: "",
+  });
+
+  it("attaches each answer's most recent evaluation", () => {
+    const items = toChatItems(
+      [message(1, "user"), message(2, "assistant"), message(3, "user"), message(4, "assistant")],
+      // newest first, as the API lists them
+      [evaluation(12, 2, 0.9), evaluation(11, 2, 0.4)],
+    );
+    expect(items.map((i) => i.evaluation?.id)).toEqual([undefined, 12, undefined, undefined]);
+    expect(items[1].messageId).toBe(2);
+  });
+
+  it("works without evaluations", () => {
+    expect(toChatItems([message(2, "assistant")])[0].evaluation).toBeUndefined();
+  });
 });

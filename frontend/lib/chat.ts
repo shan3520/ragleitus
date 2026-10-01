@@ -1,4 +1,4 @@
-import { API_PREFIX, ApiError, Citation, errorMessage, Message, reportStatus, Source, tokenStore, TurnDone } from "./api";
+import { API_PREFIX, ApiError, Citation, errorMessage, Evaluation, Message, reportStatus, Source, tokenStore, TurnDone } from "./api";
 import type { ChatItem } from "@/components/chat/message-view";
 import { readSse } from "./sse";
 
@@ -76,14 +76,20 @@ export async function streamMessage(
   }
 }
 
-/** Stored messages as the chat view shows them. */
-export function toChatItems(messages: Message[]): ChatItem[] {
+/**
+ * Stored messages as the chat view shows them, each answer with its most
+ * recent evaluation (the API lists evaluations newest first).
+ */
+export function toChatItems(messages: Message[], evaluations: Evaluation[] = []): ChatItem[] {
+  const latest = new Map<number, Evaluation>();
+  for (const e of evaluations) if (!latest.has(e.message_id)) latest.set(e.message_id, e);
   return messages.map((m) => ({
     key: `m${m.id}`,
     role: m.role,
     content: m.content,
     messageId: m.role === "assistant" ? m.id : undefined,
     citations: m.citations,
+    evaluation: latest.get(m.id),
     meta:
       m.role === "assistant"
         ? {

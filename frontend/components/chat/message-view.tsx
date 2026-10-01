@@ -18,6 +18,8 @@ export interface ChatItem {
   messageId?: number;
   citations?: Citation[] | null;
   sources?: Source[];
+  /** The answer's latest saved evaluation, if it has one. */
+  evaluation?: Evaluation;
   streaming?: boolean;
   error?: string;
   meta?: {
@@ -61,8 +63,8 @@ function Sources({ citations }: { citations: Citation[] }) {
   );
 }
 
-function EvaluateButton({ messageId }: { messageId: number }) {
-  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+function EvaluateButton({ messageId, saved }: { messageId: number; saved?: Evaluation }) {
+  const [evaluation, setEvaluation] = useState<Evaluation | null>(saved ?? null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -129,7 +131,7 @@ export function MessageView({ item }: { item: ChatItem }) {
       )}
       {citations.length > 0 && <Sources citations={citations} />}
       {!item.streaming && item.meta && <MetaLine meta={item.meta} />}
-      {!item.streaming && item.messageId && <EvaluateButton messageId={item.messageId} />}
+      {!item.streaming && item.messageId && <EvaluateButton messageId={item.messageId} saved={item.evaluation} />}
     </div>
   );
 }

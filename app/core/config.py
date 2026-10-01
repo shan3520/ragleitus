@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # HTTP
     rate_limit_per_minute: int = 60
     rate_limit_burst: int = 20
+    # Login attempts per username, whatever address they come from: the guard
+    # against password guessing that a spoofed X-Forwarded-For cannot get around.
+    login_attempts_per_minute: int = 10
+    login_attempts_burst: int = 10
     # Addresses (IPs or CIDRs) of reverse proxies allowed to report the client
     # address in X-Forwarded-For. Empty: the header is ignored, because any
     # caller can set it.

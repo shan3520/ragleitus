@@ -175,11 +175,17 @@ a local directory, or `:memory:`.
 
 Rate limiting (`RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_BURST`) counts signed-in
 requests per user and other requests (login, register) per client address.
-`X-Forwarded-For` is only believed from the reverse proxies listed in
-`TRUSTED_PROXIES`; otherwise the connecting address is used. The web app
-passes on whatever `X-Forwarded-For` the browser sent, so don't list it unless
-a proxy in front of it (nginx, a load balancer) sets the header, and then list
-both.
+`X-Forwarded-For` and `X-Forwarded-Proto` are only believed from the reverse
+proxies listed in `TRUSTED_PROXIES`; otherwise the connecting address is used.
+Login attempts are also limited per account (`LOGIN_ATTEMPTS_PER_MINUTE`,
+default 10), whatever address they claim to come from.
+
+`docker compose` gives the web container a fixed address and trusts it, so
+signed-out visitors get their own limits. The web app passes on an
+`X-Forwarded-For` the browser sent itself, so that address can be forged; the
+per-account login limit is what stops password guessing. With a reverse proxy
+(nginx, a load balancer) in front of the web app, add its address to
+`TRUSTED_PROXIES` together with the web container's.
 
 Run uvicorn with `--no-proxy-headers` (the Docker image does). Without it,
 uvicorn itself replaces the client address with the `X-Forwarded-For` value for

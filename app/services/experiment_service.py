@@ -15,4 +15,9 @@ def summarize_experiments(session: Session, user_id: int) -> dict[str, ScoreSumm
         .order_by(Experiment.id)
         .all()
     )
-    return compare_experiments({exp.name: [e.score for e in exp.evaluations] for exp in experiments})
+    scores: dict[str, list[float | None]] = {}
+    for exp in experiments:
+        # Names are not unique; keep each experiment rather than letting a later one replace an earlier one.
+        name = exp.name if exp.name not in scores else f"{exp.name} (#{exp.id})"
+        scores[name] = [e.score for e in exp.evaluations]
+    return compare_experiments(scores)

@@ -37,3 +37,14 @@ def test_summaries_include_only_the_users_own_experiments(session):
     assert summaries["alice-a"].mean == pytest.approx(0.9)
     assert list(summarize_experiments(session, bob.id)) == ["bob-b"]
     assert summarize_experiments(session, make_user(session).id) == {}
+
+
+def test_experiments_with_the_same_name_are_all_kept(session):
+    alice = make_user(session)
+    _experiment(session, "baseline", alice.id, [0.9, 0.8])
+    _experiment(session, "baseline", alice.id, [0.1])
+    summaries = summarize_experiments(session, alice.id)
+    assert len(summaries) == 2
+    assert summaries["baseline"].count == 2
+    (other,) = [name for name in summaries if name != "baseline"]
+    assert other.startswith("baseline (#") and summaries[other].count == 1

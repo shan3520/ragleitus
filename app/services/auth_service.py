@@ -12,10 +12,10 @@ from argon2.exceptions import InvalidHashError, VerificationError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import ALGORITHM, InvalidTokenError, decode_access_token
 from app.models.user import User
 
 _hasher = PasswordHasher()
-_ALGORITHM = "HS256"
 
 
 class UsernameTakenError(Exception):
@@ -26,8 +26,6 @@ class InvalidCredentialsError(Exception):
     pass
 
 
-class InvalidTokenError(Exception):
-    pass
 
 
 def hash_password(password: str) -> str:
@@ -77,41 +75,16 @@ def create_access_token(user: User, now: datetime | None = None) -> str:
         "iat": issued_at,
         "exp": issued_at + timedelta(minutes=settings.access_token_ttl_minutes),
     }
-    return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm=_ALGORITHM)
-
-
-def _decode(token: str) -> tuple[int, dict]:
-    """Verify signature and expiry; return (user_id, payload)."""
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret.get_secret_value(),
-            algorithms=[_ALGORITHM],
-            options={"require": ["sub", "exp"]},
-        )
-        return int(payload["sub"]), payload
-    except (jwt.PyJWTError, ValueError) as exc:
-        raise InvalidTokenError(str(exc)) from exc
-
-
-def token_subject(token: str) -> int | None:
-    """The user id of a token this server signed and that has not expired, without a database lookup.
-
-    Enough to tell callers apart (e.g. for rate limiting); use
-    get_user_from_token to authorize a request.
-    """
-    try:
-        return _decode(token)[0]
-    except InvalidTokenError:
-        return None
+    return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm=ALGORITHM)
 
 
 def get_user_from_token(session: Session, token: str) -> User:
-    user_id, payload = _decode(token)
+    claims = decode_access_token(token)
+    user_id = claims.user_id
 
     user = session.get(User, user_id)
     if user is None:
         raise InvalidTokenError("user not found")
-    if payload.get("ver", 0) != (user.token_version or 0):
+    if claims.version != (user.token_version or 0):
         raise InvalidTokenError("token was issued before the last password change")
     return user

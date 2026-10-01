@@ -43,9 +43,10 @@ Base.metadata.create_all(bind=engine)
 
 @pytest.fixture(autouse=True)
 def _isolate_app_state():
-    from app.core.middleware import rate_limiter
+    from app.core.middleware import login_rate_limiter, rate_limiter
     from app.main import app
 
     rate_limiter.reset()
+    login_rate_limiter.reset()
     yield
     app.dependency_overrides.clear()

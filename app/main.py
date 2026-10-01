@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -68,6 +69,10 @@ def create_app() -> FastAPI:
     # Request tracing and rate limiting middleware
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(RateLimitMiddleware)
+    # Added last, so it runs first: believe X-Forwarded-For / X-Forwarded-Proto
+    # only from TRUSTED_PROXIES (empty: from nobody). Run uvicorn with
+    # --no-proxy-headers so its own default trust of 127.0.0.1 does not apply.
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.trusted_proxies)
 
     app.include_router(health_router)
     app.include_router(provider_keys_router)

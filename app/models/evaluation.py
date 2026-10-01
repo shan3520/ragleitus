@@ -15,6 +15,8 @@ class Experiment(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     prompt_id = Column(Integer, ForeignKey("prompts.id", ondelete="CASCADE"), nullable=True)
+    # Owner. Experiments created before ownership existed have none and are shown to nobody.
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
 
     prompt = relationship("Prompt", back_populates="experiments")
     evaluations = relationship("Evaluation", back_populates="experiment", cascade="all, delete-orphan")

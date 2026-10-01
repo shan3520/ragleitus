@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.core.client_identity import rate_limit_key
 from app.core.config import settings
 from app.core.rate_limit import RateLimiter
 
@@ -68,16 +69,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path in ("/docs", "/redoc", "/openapi.json"):
             return await call_next(request)
 
-        # Identify client key by IP or forwarding header
-        client_ip = (
-            request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        # The signed-in user, or the client address (X-Forwarded-For only from trusted proxies).
+        key = rate_limit_key(request)
 
-        if not rate_limiter.allow(client_ip):
+        if not rate_limiter.allow(key):
             logger.warning(
                 "Rate limit exceeded",
-                extra={"client_ip": client_ip, "path": path},
+                extra={"client": key, "path": path},
             )
             return JSONResponse(
                 status_code=429,

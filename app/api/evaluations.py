@@ -7,10 +7,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, get_provider_factory
 from app.models.user import User
 from app.db.database import get_db
-from app.models.evaluation import Experiment
-from app.services import rag_evaluation
+from app.services import experiment_service, rag_evaluation
 from app.services.chat_service import ChatError
-from app.services.evaluation_scoring import compare_experiments
 from app.services.llm import ProviderFactory
 
 router = APIRouter(tags=["evaluations"])
@@ -22,16 +20,9 @@ def get_evaluation_summary(
     session: Session = Depends(get_db),
 ):
     """
-    Get side-by-side evaluation score summaries for all experiments.
+    Get side-by-side evaluation score summaries for the user's experiments.
     """
-    experiments = session.query(Experiment).all()
-    experiment_scores: dict[str, list[float | None]] = {}
-
-    for exp in experiments:
-        scores = [eval_obj.score for eval_obj in exp.evaluations]
-        experiment_scores[exp.name] = scores
-
-    summaries = compare_experiments(experiment_scores)
+    summaries = experiment_service.summarize_experiments(session, user.id)
     return {
         exp_name: {
             "count": summary.count,

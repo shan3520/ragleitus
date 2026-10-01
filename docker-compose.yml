@@ -45,6 +45,12 @@ services:
       timeout: 5s
       retries: 12
 
+  # The api rate-limits signed-in requests per user, so browsers behind the web
+  # container don't share a limit. Logins and registrations are limited per
+  # connecting address, which is the web container. If a reverse proxy that sets
+  # X-Forwarded-For sits in front of web, set TRUSTED_PROXIES on the api to the
+  # addresses of that proxy and of the web container. Don't trust web on its own:
+  # it passes on the X-Forwarded-For the browser sent.
   web:
     build: ./frontend
     environment:

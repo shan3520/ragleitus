@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type ConversationDetail } from "@/lib/api";
+import { api, type ConversationDetail, type EvaluationHistory } from "@/lib/api";
 import { streamMessage, toChatItems } from "@/lib/chat";
 import { useApi } from "@/lib/use-api";
 import { cn } from "@/lib/utils";
@@ -48,11 +48,14 @@ function ChatWorkspace() {
     if (createdHere.current === conversationId) return;
     let cancelled = false;
     setLoadError(null);
-    api
-      .conversation(conversationId)
-      .then((c: ConversationDetail) => {
+    Promise.all([
+      api.conversation(conversationId),
+      // Saved scores are shown under their answers; without them the chat still loads.
+      api.evaluations({ conversation_id: conversationId, limit: 500 }).catch(() => null),
+    ])
+      .then(([c, evaluations]: [ConversationDetail, EvaluationHistory | null]) => {
         if (cancelled) return;
-        setItems(toChatItems(c.messages));
+        setItems(toChatItems(c.messages, evaluations?.items));
         setProvider(c.provider ?? "");
         setModel(c.model ?? "");
       })
@@ -157,7 +160,9 @@ function ChatWorkspace() {
     void conversations.reload();
   }
 
-  const selectedSpec = (providers.data ?? []).find((p) => p.name === provider);
+  // With a single key there is nothing to choose: show it selected (the API uses it by default).
+  const shownProvider = provider || (configured.length === 1 ? configured[0].name : "");
+  const selectedSpec = (providers.data ?? []).find((p) => p.name === shownProvider);
   const noKeys = providers.data && configured.length === 0;
 
   return (
@@ -201,8 +206,8 @@ function ChatWorkspace() {
           <label className="sr-only" htmlFor="chat-provider">
             Provider
           </label>
-          <Select id="chat-provider" className="h-8 w-auto min-w-40" value={provider} onChange={(e) => setProvider(e.target.value)} disabled={streaming}>
-            <option value="">{configured.length === 1 ? `${configured[0].label} (only key)` : "Choose provider"}</option>
+          <Select id="chat-provider" className="h-8 w-auto min-w-40" value={shownProvider} onChange={(e) => setProvider(e.target.value)} disabled={streaming}>
+            {configured.length !== 1 && <option value="">Choose provider</option>}
             {configured.map((p) => (
               <option key={p.name} value={p.name}>
                 {p.label}
@@ -215,7 +220,7 @@ function ChatWorkspace() {
           <Input
             id="chat-model"
             className="h-8 w-56"
-            placeholder={selectedSpec?.default_model || (configured.length === 1 ? configured[0].default_model : "Model (provider default)")}
+            placeholder={selectedSpec?.default_model || "Model (provider default)"}
             value={model}
             onChange={(e) => setModel(e.target.value)}
             disabled={streaming}

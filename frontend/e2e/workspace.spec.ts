@@ -55,17 +55,25 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
 
   await test.step("ask a question and get a streamed answer with a citation", async () => {
     await page.goto("/chat");
+    // With a single key there is nothing to choose: it is shown selected.
+    await expect(page.getByLabel("Provider", { exact: true })).toHaveValue("custom");
     await page.getByLabel("Model", { exact: true }).fill("stub-model");
     await page.getByLabel("Message").fill("What does error code E-4711 mean?");
     await page.keyboard.press("Enter");
     await expect(page.getByRole("button", { name: "Evaluate answer" })).toBeVisible({ timeout: 30_000 });
     await expect(page.locator(".prose-answer")).toContainText("E-4711");
+    // The sample PDF's text comes through whole, not split mid-word.
+    await expect(page.locator(".prose-answer")).toContainText("recalibration wizard");
     await expect(page).toHaveURL(/\/chat\?c=\d+/);
   });
 
   await test.step("evaluate the answer", async () => {
     await page.getByRole("button", { name: "Evaluate answer" }).click();
     await expect(page.getByText("Faithfulness")).toBeVisible({ timeout: 30_000 });
+    // After a reload the saved scores are shown again, not the button.
+    await page.reload();
+    await expect(page.getByText("Faithfulness")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Evaluate answer" })).toHaveCount(0);
   });
 
   await test.step("a citation opens the cited passage", async () => {

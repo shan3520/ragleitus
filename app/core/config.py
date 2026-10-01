@@ -48,7 +48,10 @@ class Settings(BaseSettings):
 
     # HTTP
     rate_limit_per_minute: int = 60
-    rate_limit_burst: int = 20
+    # Requests a client may make in a quick run before the per-minute rate applies.
+    # One page of the web app makes several calls (the dashboard five), so 20 was
+    # exhausted by ordinary fast navigation.
+    rate_limit_burst: int = 60
     # Login attempts per username, whatever address they come from: the guard
     # against password guessing that a spoofed X-Forwarded-For cannot get around.
     login_attempts_per_minute: int = 10

@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.core.middleware import rate_limiter
+from tests.helpers import user_id_for
 from app.db.database import get_db
 from app.services.document_service import create_document_with_chunks
 
@@ -22,13 +23,14 @@ def test_search_documents_endpoint():
 
     unique_user = f"user_search_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
     try:
         doc = create_document_with_chunks(
             session=db,
-            user_id=unique_user,
+            user_id=uid,
             title="Architecture Guidelines",
             content="This document covers FastAPI app structure and python coding conventions.",
             chunk_contents=["FastAPI app structure", "python coding conventions"],
@@ -67,6 +69,7 @@ def test_search_documents_endpoint_empty():
 
     unique_user = f"user_search_empty_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -98,6 +101,7 @@ def test_search_documents_endpoint_empty():
 def test_search_documents_pagination():
     unique_user = f"user_search_page_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -105,7 +109,7 @@ def test_search_documents_pagination():
         for title in ["Alpha Pagination", "Beta Pagination", "Gamma Pagination"]:
             create_document_with_chunks(
                 session=db,
-                user_id=unique_user,
+                user_id=uid,
                 title=title,
                 content="This document discusses pagination deeply.",
                 chunk_contents=["pagination"],
@@ -140,6 +144,7 @@ def test_search_documents_pagination():
 def test_search_total_not_capped_at_1000_matches():
     unique_user = f"user_cap_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     seeded = 1017
     db_gen = get_db()
@@ -148,7 +153,7 @@ def test_search_total_not_capped_at_1000_matches():
         for i in range(seeded):
             create_document_with_chunks(
                 session=db,
-                user_id=unique_user,
+                user_id=uid,
                 title=f"Cap Probe {i:04d}",
                 content="Generic filler body content.",
                 chunk_contents=["generic filler"],
@@ -188,12 +193,12 @@ def _seed_retrieval_log(username: str):
 
         doc = create_document_with_chunks(
             session=db,
-            user_id=username,
+            user_id=user_id_for(username),
             title="Open Tracking Doc",
             content="Content for open tracking.",
             chunk_contents=["open tracking chunk"],
         )
-        query_log = SearchQueryLog(query_text="open tracking probe")
+        query_log = SearchQueryLog(user_id=user_id_for(username), query_text="open tracking probe")
         db.add(query_log)
         db.commit()
         retrieval_log = DocumentRetrievalLog(query_log_id=query_log.id, document_id=doc.id)
@@ -277,6 +282,7 @@ def test_list_saved_searches_empty():
 
     unique_user = f"user_saved_empty_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     resp = client.get("/api/documents/saved-searches", headers=headers)
     assert resp.status_code == 200
@@ -287,7 +293,7 @@ def test_list_saved_searches_empty():
     db = next(db_gen)
     try:
         assert (
-            db.query(SavedSearch).filter(SavedSearch.user_id == unique_user).count() == 0
+            db.query(SavedSearch).filter(SavedSearch.user_id == uid).count() == 0
         )
     finally:
         db.close()
@@ -298,6 +304,7 @@ def test_upsert_saved_search_creates_new():
 
     unique_user = f"user_saved_new_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     payload = {
         "search_name": "daily-report",
@@ -308,7 +315,7 @@ def test_upsert_saved_search_creates_new():
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] > 0
-    assert body["user_id"] == unique_user
+    assert body["user_id"] == uid
     assert body["search_name"] == "daily-report"
     assert body["query_text"] == "quarterly revenue"
     assert body["applied_filters"] == {"status": "completed", "group": "finance"}
@@ -317,7 +324,7 @@ def test_upsert_saved_search_creates_new():
     db_gen = get_db()
     db = next(db_gen)
     try:
-        rows = db.query(SavedSearch).filter(SavedSearch.user_id == unique_user).all()
+        rows = db.query(SavedSearch).filter(SavedSearch.user_id == uid).all()
         assert len(rows) == 1
         assert rows[0].id == body["id"]
         assert rows[0].search_name == "daily-report"
@@ -332,6 +339,7 @@ def test_upsert_saved_search_updates_existing():
 
     unique_user = f"user_saved_update_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     first = client.put(
         "/api/documents/saved-searches",
@@ -349,7 +357,7 @@ def test_upsert_saved_search_updates_existing():
     assert second.status_code == 200
     updated = second.json()
     assert updated["id"] == original_id
-    assert updated["user_id"] == unique_user
+    assert updated["user_id"] == uid
     assert updated["search_name"] == "triage"
     assert updated["query_text"] == "warning logs"
     assert updated["applied_filters"] == {"level": "warn"}
@@ -361,7 +369,7 @@ def test_upsert_saved_search_updates_existing():
     try:
         rows = (
             db.query(SavedSearch)
-            .filter(SavedSearch.user_id == unique_user, SavedSearch.search_name == "triage")
+            .filter(SavedSearch.user_id == uid, SavedSearch.search_name == "triage")
             .all()
         )
         assert len(rows) == 1
@@ -412,14 +420,14 @@ def test_list_saved_searches_returns_user_searches():
     assert {item["id"] for item in listings_a} == {alpha_id, beta_id}
     assert {item["search_name"] for item in listings_a} == {"alpha", "beta"}
     for item in listings_a:
-        assert item["user_id"] == user_a
+        assert item["user_id"] == user_id_for(user_a)
 
     resp_b_get = client_b.get("/api/documents/saved-searches", headers=headers_b)
     assert resp_b_get.status_code == 200
     listings_b = resp_b_get.json()
     assert len(listings_b) == 1
     assert listings_b[0]["id"] == b_alpha_id
-    assert listings_b[0]["user_id"] == user_b
+    assert listings_b[0]["user_id"] == user_id_for(user_b)
     assert listings_b[0]["search_name"] == "alpha"
 
     # Cross-user isolation at the persistence layer: user B must own exactly
@@ -427,11 +435,11 @@ def test_list_saved_searches_returns_user_searches():
     db_gen = get_db()
     db = next(db_gen)
     try:
-        assert db.query(SavedSearch).filter(SavedSearch.user_id == user_a).count() == 2
-        assert db.query(SavedSearch).filter(SavedSearch.user_id == user_b).count() == 1
+        assert db.query(SavedSearch).filter(SavedSearch.user_id == user_id_for(user_a)).count() == 2
+        assert db.query(SavedSearch).filter(SavedSearch.user_id == user_id_for(user_b)).count() == 1
         assert (
             db.query(SavedSearch)
-            .filter(SavedSearch.user_id == user_b, SavedSearch.id.in_([alpha_id, beta_id]))
+            .filter(SavedSearch.user_id == user_id_for(user_b), SavedSearch.id.in_([alpha_id, beta_id]))
             .count()
             == 0
         )
@@ -442,6 +450,7 @@ def test_list_saved_searches_returns_user_searches():
 def test_get_saved_search_returns_search_to_owner():
     unique_user = f"user_saved_get_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     put_resp = client.put(
         "/api/documents/saved-searches",
@@ -455,7 +464,7 @@ def test_get_saved_search_returns_search_to_owner():
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == search_id
-    assert body["user_id"] == unique_user
+    assert body["user_id"] == uid
     assert body["search_name"] == "mine"
     assert body["query_text"] == "owner terms"
     assert body["applied_filters"] == {"k": "v"}
@@ -490,7 +499,7 @@ def test_get_saved_search_owned_by_other_user_returns_404():
     try:
         row = db.query(SavedSearch).filter(SavedSearch.id == a_search_id).first()
         assert row is not None
-        assert row.user_id == user_a
+        assert row.user_id == user_id_for(user_a)
     finally:
         db.close()
 
@@ -500,6 +509,7 @@ def test_delete_saved_search_removes_row_for_owner():
 
     unique_user = f"user_saved_del_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     put_resp = client.put(
         "/api/documents/saved-searches",
@@ -550,7 +560,7 @@ def test_delete_saved_search_owned_by_other_user_keeps_row():
     try:
         row = db.query(SavedSearch).filter(SavedSearch.id == a_search_id).first()
         assert row is not None
-        assert row.user_id == user_a
+        assert row.user_id == user_id_for(user_a)
         assert row.search_name == "keep-me"
         assert row.query_text == "not yours"
     finally:

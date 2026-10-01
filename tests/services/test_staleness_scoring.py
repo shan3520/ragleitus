@@ -105,7 +105,7 @@ def test_staleness_score_uses_complete_history_beyond_old_top_n(db_session):
     lies outside the old analytics window, so any remaining global top-N
     truncation would score it from only a subset and fail this assert."""
     invalidate_staleness_cache()
-    doc = Document(title="history doc", status="ready", last_reviewed_at=None)
+    doc = Document(user_id=1, title="history doc", status="ready", last_reviewed_at=None)
     db_session.add(doc)
     db_session.commit()
 

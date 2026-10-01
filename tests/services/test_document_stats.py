@@ -175,9 +175,11 @@ def test_document_created_after_cutoff_is_excluded(db_session):
     unsearched documents list, even though it has no retrievals."""
     now = datetime.utcnow()
     recent_doc = Document(
+        user_id=1,
         title="Recent doc", status="ready", created_at=now - timedelta(days=1)
     )
     old_doc = Document(
+        user_id=1,
         title="Old doc", status="ready", created_at=now - timedelta(days=60)
     )
     db_session.add_all([recent_doc, old_doc])
@@ -196,9 +198,11 @@ def test_document_retrieved_after_cutoff_is_excluded(db_session):
     now = datetime.utcnow()
     long_ago = now - timedelta(days=60)
     retrieved_doc = Document(
+        user_id=1,
         title="Recently retrieved", status="ready", created_at=long_ago
     )
     untouched_doc = Document(
+        user_id=1,
         title="Never retrieved", status="ready", created_at=long_ago
     )
     db_session.add_all([retrieved_doc, untouched_doc])
@@ -222,9 +226,11 @@ def test_documents_straddling_n_day_cutoff_only_older_returned(db_session):
     inside its fair chance window; only the older one may be unsearched."""
     now = datetime.utcnow()
     newer_doc = Document(
+        user_id=1,
         title="Just uploaded", status="ready", created_at=now - timedelta(days=29)
     )
     older_doc = Document(
+        user_id=1,
         title="Settled doc", status="ready", created_at=now - timedelta(days=31)
     )
     db_session.add_all([newer_doc, older_doc])
@@ -248,6 +254,7 @@ def test_retrieval_exactly_on_oldest_day_of_window_excludes_document(db_session)
             return frozen_now
 
     doc = Document(
+        user_id=1,
         title="Boundary doc", status="ready", created_at=frozen_now - timedelta(days=60)
     )
     db_session.add(doc)
@@ -278,7 +285,7 @@ def test_window_with_zero_search_logs_raises_error(db_session):
 
 
 def _add_document(session, title):
-    doc = Document(title=title, status="ready")
+    doc = Document(user_id=1, title=title, status="ready")
     session.add(doc)
     session.commit()
     return doc
@@ -379,6 +386,7 @@ def test_compute_document_stats_usage_not_truncated_by_top_n(db_session):
     records and fail these asserts."""
     invalidate_staleness_cache()
     doc = Document(
+        user_id=1,
         title="busy doc",
         status="ready",
         last_reviewed_at=datetime.utcnow() - timedelta(days=10),

@@ -6,6 +6,12 @@ from sqlalchemy.exc import IntegrityError
 from app.models import Base, Document, Chunk, Group
 
 
+def _add_owner(engine):
+    """Documents and groups need an owning user (id 1 in these tests)."""
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO users (id, username, password_hash, created_at) VALUES (1, 'owner', '!', CURRENT_TIMESTAMP)"))
+
+
 def setup_engine():
     engine = create_engine("sqlite:///:memory:", echo=False)
     # Enable SQLite foreign key enforcement for tests
@@ -17,10 +23,11 @@ def setup_engine():
 def test_foreign_keys_and_relationships():
     engine = setup_engine()
     Base.metadata.create_all(engine)
+    _add_owner(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    doc = Document(title="Test Document", content="This is test content")
+    doc = Document(user_id=1, title="Test Document", content="This is test content")
     chunk1 = Chunk(content="Chunk 1 content", sequence_order=1, document=doc)
     chunk2 = Chunk(content="Chunk 2 content", sequence_order=2, document=doc)
     session.add(doc)
@@ -42,6 +49,7 @@ def test_foreign_keys_and_relationships():
 def test_fk_enforced():
     engine = setup_engine()
     Base.metadata.create_all(engine)
+    _add_owner(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -54,10 +62,11 @@ def test_fk_enforced():
 def test_cascade_delete():
     engine = setup_engine()
     Base.metadata.create_all(engine)
+    _add_owner(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    doc = Document(title="Document to Delete", content="Content")
+    doc = Document(user_id=1, title="Document to Delete", content="Content")
     chunk1 = Chunk(content="Chunk 1", sequence_order=1, document=doc)
     chunk2 = Chunk(content="Chunk 2", sequence_order=2, document=doc)
     session.add(doc)
@@ -82,12 +91,13 @@ def test_cascade_delete():
 def test_group_cascade_set_null():
     engine = setup_engine()
     Base.metadata.create_all(engine)
+    _add_owner(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    group = Group(name="Test Group")
-    doc1 = Document(title="Doc 1", content="Content 1", group=group)
-    doc2 = Document(title="Doc 2", content="Content 2", group=group)
+    group = Group(user_id=1, name="Test Group")
+    doc1 = Document(user_id=1, title="Doc 1", content="Content 1", group=group)
+    doc2 = Document(user_id=1, title="Doc 2", content="Content 2", group=group)
     session.add(group)
     session.commit()
 
@@ -116,11 +126,13 @@ def test_document_review_tracking():
     
     engine = setup_engine()
     Base.metadata.create_all(engine)
+    _add_owner(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
 
     now = datetime.now(timezone.utc)
     doc = Document(
+        user_id=1,
         title="Review Tracking Doc",
         content="Testing review fields",
         last_reviewed_at=now,

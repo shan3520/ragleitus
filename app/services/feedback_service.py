@@ -6,7 +6,15 @@ from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
 
 NEGATIVE_FEEDBACK_THRESHOLD = 3
 
-def create_feedback(db: Session, search_log_id: int, is_positive: bool, comment: str = None) -> SearchFeedback:
+class SearchLogNotFoundError(Exception):
+    pass
+
+
+def create_feedback(db: Session, search_log_id: int, is_positive: bool, comment: str = None, user_id: int | None = None) -> SearchFeedback:
+    search_log = db.get(SearchQueryLog, search_log_id)
+    if search_log is None or (user_id is not None and search_log.user_id != user_id):
+        raise SearchLogNotFoundError(search_log_id)
+
     feedback = SearchFeedback(
         search_log_id=search_log_id,
         is_positive=is_positive,
@@ -37,8 +45,8 @@ def create_feedback(db: Session, search_log_id: int, is_positive: bool, comment:
 
     return feedback
 
-def get_recent_negative_feedback(db: Session, limit: int = 10):
-    results = (
+def get_recent_negative_feedback(db: Session, limit: int = 10, user_id: int | None = None):
+    query = (
         db.query(
             SearchFeedback.id,
             SearchQueryLog.query_text,
@@ -48,10 +56,10 @@ def get_recent_negative_feedback(db: Session, limit: int = 10):
         )
         .join(SearchQueryLog, SearchFeedback.search_log_id == SearchQueryLog.id)
         .filter(SearchFeedback.is_positive == False)
-        .order_by(desc(SearchFeedback.created_at))
-        .limit(limit)
-        .all()
     )
+    if user_id is not None:
+        query = query.filter(SearchQueryLog.user_id == user_id)
+    results = query.order_by(desc(SearchFeedback.created_at)).limit(limit).all()
     
     return [
         {
@@ -64,19 +72,18 @@ def get_recent_negative_feedback(db: Session, limit: int = 10):
         for r in results
     ]
 
-def get_top_negative_feedback_queries(db: Session, limit: int = 10):
-    results = (
+def get_top_negative_feedback_queries(db: Session, limit: int = 10, user_id: int | None = None):
+    query = (
         db.query(
             SearchQueryLog.query_text,
             func.count(SearchFeedback.id).label("negative_count")
         )
         .join(SearchFeedback, SearchFeedback.search_log_id == SearchQueryLog.id)
         .filter(SearchFeedback.is_positive == False)
-        .group_by(SearchQueryLog.query_text)
-        .order_by(desc("negative_count"))
-        .limit(limit)
-        .all()
     )
+    if user_id is not None:
+        query = query.filter(SearchQueryLog.user_id == user_id)
+    results = query.group_by(SearchQueryLog.query_text).order_by(desc("negative_count")).limit(limit).all()
     
     return [
         {

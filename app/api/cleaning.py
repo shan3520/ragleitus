@@ -1,9 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from app.api.deps import get_current_user
 from pydantic import BaseModel
 
 from app.services.text_cleaning import clean_text_pages
 
-router = APIRouter(tags=["cleaning"])
+router = APIRouter(tags=["cleaning"], dependencies=[Depends(get_current_user)])
 
 
 class CleanRequest(BaseModel):

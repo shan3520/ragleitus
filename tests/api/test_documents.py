@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.core.middleware import rate_limiter
+from tests.helpers import user_id_for
 
 def _get_authenticated_client(username: str = "doc_user"):
     rate_limiter.reset()
@@ -70,7 +71,7 @@ def test_upload_document_persists_group_id():
     db_gen = get_db()
     session = next(db_gen)
     try:
-        group = Group(name="Upload Group")
+        group = Group(name="Upload Group", user_id=user_id_for("upload_group_user"))
         session.add(group)
         session.commit()
         group_id = group.id
@@ -91,7 +92,7 @@ def test_upload_document_persists_group_id():
         assert response.status_code == 200
 
         doc = session.query(Document).filter(
-            Document.user_id == "upload_group_user", Document.title == title
+            Document.user_id == user_id_for("upload_group_user"), Document.title == title
         ).first()
         assert doc is not None
         assert doc.group_id == group_id
@@ -131,7 +132,7 @@ def test_upload_document_without_group_defaults_to_none():
         assert response.status_code == 200
 
         doc = session.query(Document).filter(
-            Document.user_id == "upload_nogroup_user", Document.title == title
+            Document.user_id == user_id_for("upload_nogroup_user"), Document.title == title
         ).first()
         assert doc is not None
         assert doc.group_id is None
@@ -156,7 +157,7 @@ def test_review_document_endpoint():
     
     doc = create_document_with_chunks(
         session=session,
-        user_id="api_review_user",
+        user_id=user_id_for("api_review_user"),
         title="To Be Reviewed",
         content="Content to review",
         chunk_contents=[],
@@ -209,7 +210,7 @@ def test_list_documents_sorts_by_negative_impact():
         ]:
             doc = create_document_with_chunks(
                 session=session,
-                user_id="impact_sort_user",
+                user_id=user_id_for("impact_sort_user"),
                 title=title,
                 content="Impact sorting content",
                 chunk_contents=[],
@@ -217,7 +218,7 @@ def test_list_documents_sorts_by_negative_impact():
             session.commit()
 
             for _ in range(negative_count):
-                query_log = SearchQueryLog(query_text=f"negative query for {title}")
+                query_log = SearchQueryLog(query_text=f"negative query for {title}", user_id=user_id_for("impact_sort_user"))
                 session.add(query_log)
                 session.flush()
                 feedback = SearchFeedback(
@@ -269,7 +270,7 @@ def test_list_documents_query_count_does_not_scale_with_document_count():
     try:
         create_document_with_chunks(
             session=session,
-            user_id=baseline_user,
+            user_id=user_id_for(baseline_user),
             title="single_doc",
             content="content",
             chunk_contents=[],
@@ -280,7 +281,7 @@ def test_list_documents_query_count_does_not_scale_with_document_count():
         for idx in range(6):
             doc = create_document_with_chunks(
                 session=session,
-                user_id=scaling_user,
+                user_id=user_id_for(scaling_user),
                 title=f"scaling_doc_{idx}",
                 content="content",
                 chunk_contents=[],
@@ -329,8 +330,8 @@ def test_list_documents_query_count_does_not_scale_with_document_count():
         by_id = {item["id"]: item for item in payload_multi}
         assert set(by_id) == set(expected_impacts)
         for doc_id, item in by_id.items():
-            assert set(item) == {"id", "user_id", "title", "negative_impact"}
-            assert item["user_id"] == scaling_user
+            assert set(item) == {"id", "user_id", "title", "status", "negative_impact"}
+            assert item["user_id"] == user_id_for(scaling_user)
             assert item["title"].startswith("scaling_doc_")
             assert item["negative_impact"] == expected_impacts[doc_id]
 
@@ -341,3 +342,144 @@ def test_list_documents_query_count_does_not_scale_with_document_count():
             next(db_gen)
         except StopIteration:
             pass
+
+
+def test_users_cannot_read_list_or_delete_each_others_documents():
+    from app.db.database import SessionLocal
+    from app.services.document_service import create_document_with_chunks
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    owner_headers, owner_id = login(client, unique_username("doc_owner"))
+    other_headers, _ = login(client, unique_username("doc_other"))
+
+    session = SessionLocal()
+    doc = create_document_with_chunks(session, owner_id, "Private doc", "secret", ["secret"])
+    session.commit()
+    doc_id = doc.id
+    session.close()
+
+    assert client.get("/api/documents", headers=other_headers).json() == []
+    assert client.get(f"/api/documents/{doc_id}", headers=other_headers).status_code == 404
+    assert client.delete(f"/api/documents/{doc_id}", headers=other_headers).status_code == 404
+    assert client.get(f"/api/documents/{doc_id}", headers=owner_headers).status_code == 200
+
+
+def test_upload_into_another_users_group_is_rejected():
+    from app.db.database import SessionLocal
+    from app.models.group import Group
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    owner_headers, owner_id = login(client, unique_username("group_owner"))
+    other_headers, _ = login(client, unique_username("group_other"))
+
+    session = SessionLocal()
+    group = Group(name="Owner group", user_id=owner_id)
+    session.add(group)
+    session.commit()
+    group_id = group.id
+    session.close()
+
+    pdf = fitz.open()
+    pdf.new_page().insert_text((72, 72), "content")
+    pdf_bytes = pdf.tobytes()
+    pdf.close()
+
+    response = client.post(
+        "/documents/extract",
+        files={"file": ("x.pdf", pdf_bytes, "application/pdf")},
+        data={"group_id": str(group_id)},
+        headers=other_headers,
+    )
+    assert response.status_code == 404
+
+
+def _pdf_bytes(*texts):
+    pdf = fitz.open()
+    for text in texts:
+        pdf.new_page().insert_text((72, 72), text)
+    data = pdf.tobytes()
+    pdf.close()
+    return data
+
+
+def test_upload_indexes_in_background_and_reports_status():
+    from app.services.vector_store import get_vector_store
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    headers, user_id = login(client, unique_username("uploader"))
+
+    resp = client.post(
+        "/api/documents",
+        files={"file": ("policy.pdf", _pdf_bytes("Leave policy: 25 days.", "Refunds: 30 days."), "application/pdf")},
+        headers=headers,
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["filename"] == "policy.pdf"
+
+    # TestClient runs background tasks before returning, so indexing has finished.
+    detail = client.get(f"/api/documents/{body['id']}", headers=headers).json()
+    assert detail["status"] == "ready"
+    assert detail["error"] is None
+    assert [(c["page_number"], c["content"]) for c in detail["chunks"]] == [
+        (1, "Leave policy: 25 days."),
+        (2, "Refunds: 30 days."),
+    ]
+    assert get_vector_store().count(user_id, body["id"]) == 2
+
+    listed = client.get("/api/documents", headers=headers).json()
+    assert [(d["id"], d["status"]) for d in listed] == [(body["id"], "ready")]
+
+
+def test_upload_accepts_markdown_and_rejects_duplicates_and_bad_types():
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    headers, _ = login(client, unique_username("uploader"))
+
+    first = client.post("/api/documents", files={"file": ("notes.md", b"# Notes\nShip Friday.", "text/markdown")}, headers=headers)
+    assert first.status_code == 202
+
+    dup = client.post("/api/documents", files={"file": ("copy.md", b"# Notes\nShip Friday.", "text/markdown")}, headers=headers)
+    assert dup.status_code == 409
+    assert dup.json()["detail"]["document_id"] == first.json()["id"]
+
+    bad = client.post("/api/documents", files={"file": ("pic.png", b"\x89PNG", "image/png")}, headers=headers)
+    assert bad.status_code == 400
+
+
+def test_reindex_and_delete_manage_vectors():
+    from app.services.vector_store import get_vector_store
+    from tests.helpers import login, unique_username
+
+    client = TestClient(app)
+    headers, user_id = login(client, unique_username("reindexer"))
+    doc_id = client.post("/api/documents", files={"file": ("a.txt", b"Alpha. Beta.", "text/plain")}, headers=headers).json()["id"]
+
+    resp = client.post(f"/api/documents/{doc_id}/reindex", headers=headers)
+    assert resp.status_code == 202
+    assert client.get(f"/api/documents/{doc_id}", headers=headers).json()["status"] == "ready"
+    assert get_vector_store().count(user_id, doc_id) == 1
+
+    other_headers, _ = login(client, unique_username("other"))
+    assert client.post(f"/api/documents/{doc_id}/reindex", headers=other_headers).status_code == 404
+
+    assert client.delete(f"/api/documents/{doc_id}", headers=headers).status_code == 204
+    assert get_vector_store().count(user_id, doc_id) == 0
+
+
+def test_oversized_upload_is_refused_with_413(monkeypatch):
+    from app.services import ingestion
+    from tests.helpers import login, unique_username
+
+    monkeypatch.setattr(ingestion.settings, "max_upload_mb", 1)
+    client = TestClient(app)
+    headers, _ = login(client, unique_username("big_uploader"))
+    big = b"a " * (1024 * 1024)
+    resp = client.post("/api/documents", files={"file": ("big.txt", big, "text/plain")}, headers=headers)
+    assert resp.status_code == 413
+    assert client.get("/api/documents", headers=headers).json() == []

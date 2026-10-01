@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from app.api.auth import get_current_user
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.core.errors import NoSearchActivityError
 from app.db.database import get_db
 from app.services.document_service import list_user_documents
@@ -31,42 +32,43 @@ router = APIRouter(tags=["stats"])
 
 @router.get("/api/stats/popular-searches", response_model=List[PopularSearch])
 def api_popular_searches(
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
     days: int = 30,
     limit: int = 10,
 ):
-    return get_popular_searches(session, days=days, limit=limit)
+    return get_popular_searches(session, days=days, limit=limit, user_id=user.id)
 
 @router.get("/api/stats/popular-documents", response_model=List[PopularDocument])
 def api_popular_documents(
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
     days: int = 30,
     limit: int = 10,
 ):
-    return get_popular_documents(session, days=days, limit=limit)
+    return get_popular_documents(session, days=days, limit=limit, user_id=user.id)
 
 @router.get("/api/stats/search-latency", response_model=list[DailySearchLatency])
 def api_daily_search_latency(
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
     days: int = 30,
 ):
-    return get_daily_search_latency(session, days)
+    return get_daily_search_latency(session, days, user_id=user.id)
 
 
 @router.get("/api/documents/stats")
 def get_collection_stats(
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
     days: int = 7,
 ):
     """
     Get aggregate document collection statistics for the current user.
     """
-    documents = list_user_documents(session, user["username"])
+    documents = list_user_documents(session, user.id)
     stats = compute_document_stats(documents)
-    search_analytics = get_search_analytics_or_empty(session, days=days)
+    search_analytics = get_search_analytics_or_empty(session, days=days, user_id=user.id)
     return {
         "total_documents": stats.total_documents,
         "total_chunks": stats.total_chunks,
@@ -83,7 +85,7 @@ class UnderperformingDocument(BaseModel):
 
 @router.get("/api/stats/underperforming-documents", response_model=List[UnderperformingDocument])
 def api_underperforming_documents(
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
     # No popularity floor by default. Callers that want one pass it; see
     # get_underperforming_document_ids for why five was the wrong default.
@@ -91,7 +93,7 @@ def api_underperforming_documents(
     days: int = 30,
     min_shown: int | None = None,
 ):
-    documents = list_user_documents(session, user["username"])
+    documents = list_user_documents(session, user.id)
     if not documents:
         return []
 
@@ -120,7 +122,7 @@ def api_underperforming_documents(
 
 @router.get("/api/stats/unsearched-documents")
 def api_unsearched_documents(
-    user: dict = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     days: int = 30,
     db: Session = Depends(get_db),
 ):
@@ -129,7 +131,7 @@ def api_unsearched_documents(
     any search within the last ``days`` days.
     """
     try:
-        documents = get_unsearched_documents(db, days)
+        documents = get_unsearched_documents(db, days, user_id=user.id)
     except NoSearchActivityError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -154,14 +156,18 @@ class DeadDocumentResponse(BaseModel):
 
 @router.get("/dead-documents", response_model=list[DeadDocumentResponse])
 @router.get("/stats/dead-documents", response_model=list[DeadDocumentResponse])
-def api_dead_documents(days: int = 30, db: Session = Depends(get_db)):
+def api_dead_documents(
+    days: int = 30,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Get documents that existed before the cutoff and were not retrieved in
     any search within the last ``days`` days, newest first. Returns a plain
     text warning when there is no search activity to compare against.
     """
     try:
-        documents = get_unsearched_documents(db, days)
+        documents = get_unsearched_documents(db, days, user_id=user.id)
     except NoSearchActivityError as e:
         return Response(content=str(e), status_code=400, media_type="text/plain")
 

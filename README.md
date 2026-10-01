@@ -1,11 +1,280 @@
 # RAGForge
 
-An AI engineering workspace for Retrieval-Augmented Generation: knowledge bases,
-multi-provider LLM experimentation, telemetry and evaluation.
+A workspace for Retrieval-Augmented Generation. Upload documents, chat with them
+using the LLM provider of your choice (bring your own key), get answers with
+page-level citations, and measure latency, token usage, cost and answer quality.
 
-Built autonomously by ShanAuto from `docs/SPEC.md`. Work lands one verified
-commit at a time; a change that fails the build is never committed.
+The target design is in [`docs/SPEC.md`](docs/SPEC.md). This repository ships
+the **API** (FastAPI, with Swagger UI) and the **web app** (Next.js, in
+[`frontend/`](frontend)). Some parts of the spec are not built yet; see
+[What is not done yet](#what-is-not-done-yet).
 
-## Status
+## What it does
 
-Scaffolding. See `docs/SPEC.md` for the target design.
+| Area | What you get |
+|---|---|
+| Accounts | Register and log in (argon2 password hashing, JWT). Every document, key, conversation and metric is private to its owner. |
+| Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, NVIDIA NIM, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
+| Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Re-index or delete at any time. |
+| Chat | Hybrid retrieval (dense vectors + BM25, merged with reciprocal rank fusion), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
+| Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day. |
+| Evaluation | LLM-as-a-judge scoring of any answer: faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
+
+## Quick start with Docker Compose
+
+Requires Docker with Compose v2.
+
+```bash
+cp .env.example .env
+# Fill in JWT_SECRET, PROVIDER_KEY_SECRET and POSTGRES_PASSWORD. For example:
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+docker compose up --build
+```
+
+This starts PostgreSQL 16, Qdrant, the API and the web app. Migrations run
+automatically. Open <http://localhost:3000>, create an account, add a provider
+key and upload a document. The interactive API is at <http://localhost:8000/docs>.
+
+The first document you upload triggers a one-time download of the embedding
+model (`BAAI/bge-small-en-v1.5`, about 70 MB, from Hugging Face). It is cached in
+the `model-cache` volume.
+
+## Quick start without Docker
+
+Requires Python 3.11+. Nothing else needs to run: the defaults are a SQLite
+file and an embedded Qdrant store in `./data/qdrant`.
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env            # fill in JWT_SECRET and PROVIDER_KEY_SECRET
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+To try it offline, set `EMBEDDING_BACKEND=fake` in `.env`. That uses a hashing
+embedder instead of the real model, so retrieval quality is poor, but every
+feature works.
+
+Then start the web app (Node.js 20.9+) in a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev                     # http://localhost:3000, talks to the API on :8000
+```
+
+Set `API_URL` if the API is somewhere else.
+
+## Walkthrough
+
+In the web app: **Providers** → add a key, **Documents** → upload the files in
+[`samples/`](samples), **Chat** → ask "What does error code E-4711 mean?". The
+answer cites its passages; click a citation to open the passage, or
+**Evaluate answer** to score it. **Telemetry** and **Evaluations** show the
+numbers.
+
+The same flow works in the Swagger UI. With `curl`:
+
+```bash
+API=http://localhost:8000
+
+# 1. Create an account and log in
+curl -s -X POST $API/auth/register -H 'Content-Type: application/json' \
+  -d '{"username": "ada", "password": "correct-horse-battery"}'
+TOKEN=$(curl -s -X POST $API/auth/login -H 'Content-Type: application/json' \
+  -d '{"username": "ada", "password": "correct-horse-battery"}' | python -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+AUTH="Authorization: Bearer $TOKEN"
+
+# 2. Add a provider key (checked against the provider, stored encrypted)
+curl -s -X POST $API/api/provider-keys -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"provider": "anthropic", "key": "sk-ant-..."}'
+#    Self-hosted server instead (private addresses need ALLOW_PRIVATE_PROVIDER_URLS=true):
+#    -d '{"provider": "custom", "key": "none", "base_url": "http://localhost:11434/v1"}'
+
+# 3. Upload the sample documents and wait for status "ready"
+curl -s -X POST $API/api/documents -H "$AUTH" -F file=@samples/roboarm-x2-faq.pdf
+curl -s -X POST $API/api/documents -H "$AUTH" -F file=@samples/employee-handbook.md
+curl -s $API/api/documents -H "$AUTH"
+
+# 4. Start a conversation and ask a question (streamed as server-sent events)
+CONV=$(curl -s -X POST $API/api/conversations -H "$AUTH" -H 'Content-Type: application/json' -d '{}' \
+  | python -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+curl -N -X POST $API/api/conversations/$CONV/messages -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"content": "What does error code E-4711 mean?"}'
+#    Events: sources -> token ... -> citations -> done (usage, cost, latency)
+#    Add "stream": false for a single JSON response.
+
+# 5. Evaluate the answer (use the message_id from the "done" event)
+curl -s -X POST $API/api/evaluations -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"message_id": 2, "reference_answer": "Joint-3 encoder lost calibration."}'
+
+# 6. Look at the numbers
+curl -s "$API/api/telemetry/summary?days=7" -H "$AUTH"
+curl -s $API/api/evaluations -H "$AUTH"
+```
+
+## Architecture
+
+```mermaid
+flowchart LR
+    browser[Browser] --> web[Next.js web app<br/>frontend/]
+    web -->|/backend/* proxy, JWT| api[FastAPI routes<br/>app/api]
+    swagger[Swagger UI / curl] -->|JWT| api
+    api --> services[Services<br/>app/services]
+    services --> pg[(PostgreSQL<br/>users, documents, chunks,<br/>conversations, telemetry,<br/>evaluations)]
+    services --> qdrant[(Qdrant<br/>chunk vectors)]
+    services --> embed[fastembed<br/>local ONNX model]
+    services --> llm[LLM providers<br/>user's own keys]
+
+    subgraph Ingestion
+      up[Upload] --> extract[Extract + clean<br/>PyMuPDF] --> store[(document text)]
+      store -. background task .-> chunk[Chunk per page] --> vec[Embed] --> qdrant
+    end
+
+    subgraph Chat turn
+      q[Question] --> dense[Dense search] & bm25[BM25]
+      dense & bm25 --> rrf[Reciprocal rank fusion] --> prompt[Numbered passages] --> gen[Stream answer] --> cite[Resolve n citations]
+      gen --> tel[Telemetry]
+    end
+```
+
+- **Layers.** Route handlers in `app/api` only parse requests and call services.
+  Business logic lives in `app/services`, and tables in `app/models`
+  (see [AGENTS.md](AGENTS.md)).
+- **Where data lives.** Vectors live only in Qdrant, and each point carries only
+  ids. Chunk text lives in the SQL `chunks` table. Every vector query is filtered
+  by the owner's `user_id`.
+- **Indexing.** Upload extracts and cleans the text right away, so a bad file
+  fails immediately. Chunking and embedding then run as a background task that
+  records `pending → indexing → ready | failed`. The cleaned pages are kept, so
+  re-indexing never needs the original file.
+- **Web app.** `frontend/` is a Next.js App Router app. The browser only talks to
+  its own origin: a route handler forwards `/backend/*` to `API_URL` at runtime
+  (streaming, so chat tokens arrive as they are generated). No CORS setup is
+  needed, and one build works against any API address.
+- **Provider adapters.** These live in `app/services/llm`: one adapter for the
+  OpenAI-compatible family, one for Gemini, and one using the official
+  `anthropic` SDK. All stream text and report token usage the same way.
+
+## Configuration
+
+Settings are environment variables (or `.env`). [`.env.example`](.env.example)
+lists them all. Only these are required:
+
+| Variable | Purpose |
+|---|---|
+| `JWT_SECRET` | Signs login tokens. At least 32 characters. The app refuses to start without it. |
+| `PROVIDER_KEY_SECRET` | Encrypts stored provider keys. Changing it makes stored keys unreadable. |
+| `POSTGRES_PASSWORD` | Only for `docker compose`. |
+
+`DATABASE_URL` accepts any SQLAlchemy URL. PostgreSQL uses
+`postgresql+psycopg://user:pass@host/db`. `VECTOR_STORE_URL` takes a Qdrant URL,
+a local directory, or `:memory:`.
+
+Self-hosted providers (Ollama, LM Studio, vLLM) are added as `custom` with a
+base URL. The server calls that URL, so by default it must be a public address;
+set `ALLOW_PRIVATE_PROVIDER_URLS=true` to allow localhost, your LAN or other
+containers. Error messages from a custom provider carry only the HTTP status,
+never the response body.
+
+Changing your password (`PATCH /auth/me/password`) signs out every existing
+session and returns a new token.
+
+Cost estimates use the table in
+[`app/services/llm/pricing.py`](app/services/llm/pricing.py) (USD per million
+tokens). Models that are not listed get no cost rather than a guess, and are
+counted as `unpriced_requests` in the telemetry summary.
+
+## API overview
+
+| Endpoint | |
+|---|---|
+| `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `PATCH /auth/me/password` | Accounts |
+| `GET /api/providers`, `POST/GET/DELETE /api/provider-keys`, `POST /api/provider-keys/{provider}/validate` | Providers and keys |
+| `POST /api/documents`, `GET /api/documents[/{id}]`, `POST /api/documents/{id}/reindex`, `DELETE /api/documents/{id}` | Documents |
+| `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`, `POST /api/conversations/{id}/messages` | Chat |
+| `GET /api/telemetry/summary`, `GET /api/telemetry/events` | Telemetry |
+| `POST /api/evaluations`, `GET /api/evaluations` | Evaluation |
+| `GET /health`, `GET /api/health/subsystems` | Health (no login needed) |
+
+Analytics endpoints predate the chat flow and are scoped to the logged-in user:
+search statistics, unanswered queries, feedback, history, groups and saved
+searches. They are all listed in `/docs`.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest -q
+```
+
+The tests need no external services and no network. They use SQLite, an
+in-process Qdrant, a fake embedder and mocked HTTP. `tests/conftest.py` blocks
+outbound connections, so a test that tries to reach a real provider fails.
+Schema changes go through Alembic:
+
+```bash
+alembic revision -m "describe the change"   # write the migration by hand
+alembic upgrade head
+```
+
+`tests/test_migrations.py` fails if the migrations and the models ever disagree.
+
+### Frontend
+
+```bash
+cd frontend
+npm run lint && npm run typecheck && npm test   # unit tests: Jest, no server needed
+```
+
+The end-to-end tests drive a real browser through sign-up, adding a key,
+uploading the samples, a cited answer, evaluation, telemetry and a password
+change. They use a stub OpenAI-compatible LLM (`frontend/e2e/stub-llm.mjs`, key
+`stub-key`), so no real key is needed. Start the API with the fake embedder, a
+high rate limit, and private provider URLs allowed (the stub runs on
+localhost), then build and run the suite:
+
+```bash
+# terminal 1, repository root
+EMBEDDING_BACKEND=fake RATE_LIMIT_BURST=1000 ALLOW_PRIVATE_PROVIDER_URLS=true uvicorn app.main:app
+
+# terminal 2
+cd frontend
+npx playwright install chromium   # once
+npm run build && npm run e2e      # starts the stub LLM and the web app itself
+```
+
+Against the Docker Compose stack instead, point the suite at it and let the API
+container reach the stub on the host:
+`E2E_BASE_URL=http://localhost:3000 E2E_LLM_URL=http://host.docker.internal:9999/v1 npm run e2e`
+(the `api` service needs `ALLOW_PRIVATE_PROVIDER_URLS: "true"`, a high
+`RATE_LIMIT_BURST`, and `extra_hosts: ["host.docker.internal:host-gateway"]` on Linux).
+
+## What is not done yet
+
+`docs/SPEC.md` describes more than this. Still to build:
+
+- **Task queue.** Indexing runs as an in-process background task. Moving it to
+  Celery + Redis means wrapping `app.services.ingestion.index_document`, which
+  already opens its own session. Until then, an API restart during indexing
+  leaves the document `pending` or `indexing`, and `POST .../reindex` recovers it.
+- **Prompt library and experiments.** Saving and versioning prompts, and
+  comparing prompts, models or retrieval strategies side by side, in the API and
+  as pages in the web app.
+- **Observability stack.** No Langfuse, OpenTelemetry, Prometheus or Grafana.
+  Telemetry is stored in PostgreSQL and served by the API.
+- **Evaluation frameworks.** No Ragas or DeepEval. Evaluation uses its own LLM
+  judge with the same metric names.
+- **Embeddings through a provider key.** Embeddings come from the local model for
+  every user. Per-user embedding providers would need each document to record its
+  embedding model.
+- **LangGraph.** The RAG flow is plain service code; it does not need an agent
+  graph yet.
+- **Scale.** BM25 scores a user's chunks in memory on each question. That is fine
+  up to tens of thousands of chunks per user; beyond that it needs a keyword
+  index (e.g. PostgreSQL full-text search).
+
+Some older endpoints still return placeholder data: `/api/export/metrics`,
+`/api/experiments/report` and `/api/documents/batch-status`.

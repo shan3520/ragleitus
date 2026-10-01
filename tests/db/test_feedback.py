@@ -44,7 +44,7 @@ def test_document_feedback_relationship_and_cascade(session):
     query_log = SearchQueryLog(query_text="cascade test")
     session.add(query_log)
     
-    doc = Document(title="Cascade Doc", status="ready")
+    doc = Document(user_id=1, title="Cascade Doc", status="ready")
     session.add(doc)
     
     feedback = SearchFeedback(

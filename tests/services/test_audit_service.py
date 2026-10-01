@@ -15,6 +15,9 @@ class _FailingSession:
     def commit(self):
         raise RuntimeError("database is down")
 
+    def rollback(self):
+        pass
+
     def close(self):
         pass
 

@@ -19,14 +19,10 @@ tests/             mirrors the app/ tree
 alembic/           migrations
 ```
 
-**Do not create a `src/` directory.** A `src/` tree currently exists and is
-being consolidated into `app/`; it is legacy, not a second home. Two agents
-independently chose two different roots on the first night of work, each passed
-the build, and the result was a codebase split down the middle. Nothing in the
-test suite could see the problem.
-
-If you find yourself adding `src/anything`, you are adding to the half that is
-being deleted.
+**Do not create a `src/` directory.** Early on, two agents independently chose
+two different roots, each passed the build, and the result was a codebase split
+down the middle. That tree has since been consolidated into `app/`, and `src/`
+is git-ignored so it cannot come back by accident.
 
 ## Layering
 

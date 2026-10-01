@@ -1,0 +1,63 @@
+# Starts the web UI and the API with PostgreSQL and Qdrant.
+#   cp .env.example .env   # then fill in the secrets
+#   docker compose up --build
+# Open http://localhost:3000. The API also listens on http://localhost:8000
+# (Swagger UI at /docs).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ragforge
+      POSTGRES_DB: ragforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragforge -d ragforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://ragforge:${POSTGRES_PASSWORD}@postgres:5432/ragforge
+      VECTOR_STORE_URL: http://qdrant:6333
+    ports:
+      - "8000:8000"
+    volumes:
+      - model-cache:/data/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build: ./frontend
+    environment:
+      # The UI proxies /backend/* to this address from the server side, so the
+      # browser never needs to reach the API directly.
+      API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  qdrant-data:
+  model-cache:

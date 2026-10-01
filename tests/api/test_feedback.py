@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.core.middleware import rate_limiter
+from tests.helpers import user_id_for
 from app.db.database import get_db
 
 def _get_authenticated_client(username: str):
@@ -17,6 +18,7 @@ def _get_authenticated_client(username: str):
 def test_recent_negative_feedback_endpoint():
     unique_user = f"feedback_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -28,7 +30,7 @@ def test_recent_negative_feedback_endpoint():
         now = datetime.now(timezone.utc)
         
         # Create a search log
-        log = SearchQueryLog(
+        log = SearchQueryLog(user_id=uid, 
             query_text="negative feedback query", 
             generated_answer="this is a bad answer", 
             timestamp=now
@@ -68,6 +70,7 @@ def test_recent_negative_feedback_endpoint():
 def test_top_negative_feedback_queries_endpoint():
     unique_user = f"top_feedback_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -83,10 +86,10 @@ def test_top_negative_feedback_queries_endpoint():
         query2_text = f"how to do Y {unique_suffix}"
         
         # Create search logs for query 1
-        log1a = SearchQueryLog(query_text=query1_text, generated_answer="A1", timestamp=now)
-        log1b = SearchQueryLog(query_text=query1_text, generated_answer="A2", timestamp=now)
+        log1a = SearchQueryLog(user_id=uid, query_text=query1_text, generated_answer="A1", timestamp=now)
+        log1b = SearchQueryLog(user_id=uid, query_text=query1_text, generated_answer="A2", timestamp=now)
         # Create search logs for query 2
-        log2a = SearchQueryLog(query_text=query2_text, generated_answer="B1", timestamp=now)
+        log2a = SearchQueryLog(user_id=uid, query_text=query2_text, generated_answer="B1", timestamp=now)
         
         db.add_all([log1a, log1b, log2a])
         db.commit()
@@ -138,6 +141,7 @@ def test_top_negative_feedback_queries_endpoint():
 def test_submit_negative_feedback_links_documents():
     unique_user = f"submit_feedback_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -149,12 +153,12 @@ def test_submit_negative_feedback_links_documents():
         now = datetime.now(timezone.utc)
         
         # Create a document
-        doc = Document(title="test doc", content="test content", status="processed")
+        doc = Document(user_id=uid, title="test doc", content="test content", status="processed")
         db.add(doc)
         db.commit()
         
         # Create a search log
-        log = SearchQueryLog(
+        log = SearchQueryLog(user_id=uid, 
             query_text="query with retrieval", 
             generated_answer="answer", 
             timestamp=now

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.middleware import rate_limiter
 from app.db.database import get_db
+from tests.helpers import user_id_for
 
 
 def _get_authenticated_client(username: str):
@@ -17,15 +18,16 @@ def _get_authenticated_client(username: str):
     return client, headers
 
 
-def _insert_audit_logs(entries):
-    """entries: list of (action, document_id, timestamp)."""
+def _insert_audit_logs(entries, username):
+    """entries: list of (action, document_id, timestamp), owned by ``username``."""
+    user_id = user_id_for(username)
     db_gen = get_db()
     db = next(db_gen)
     try:
         from app.models.audit_log import AuditLog
 
         for action, document_id, timestamp in entries:
-            db.add(AuditLog(action=action, document_id=document_id, timestamp=timestamp))
+            db.add(AuditLog(action=action, user_id=user_id, document_id=document_id, timestamp=timestamp))
         db.commit()
     finally:
         db.close()
@@ -39,7 +41,7 @@ def test_history_pagination_offset_slices_records():
     entries = []
     for i in range(1, 9):
         entries.append((unique, i, base + timedelta(minutes=i)))
-    _insert_audit_logs(entries)
+    _insert_audit_logs(entries, unique)
 
     resp1 = client.get(f"/api/history?action_type={unique}&limit=3&offset=0", headers=headers)
     assert resp1.status_code == 200
@@ -66,7 +68,7 @@ def test_history_returns_newest_first():
         (unique, 3, base + timedelta(minutes=60)),
         (unique, 4, base + timedelta(minutes=90)),
     ]
-    _insert_audit_logs(entries)
+    _insert_audit_logs(entries, unique)
 
     resp = client.get(f"/api/history?action_type={unique}&limit=10", headers=headers)
     assert resp.status_code == 200
@@ -90,7 +92,7 @@ def test_history_filters_by_action_type():
         (deleted, 103, base + timedelta(minutes=2)),
         (moved, 104, base + timedelta(minutes=3)),
     ]
-    _insert_audit_logs(entries)
+    _insert_audit_logs(entries, unique)
 
     resp = client.get(f"/api/history?action_type={deleted}&limit=10", headers=headers)
     assert resp.status_code == 200
@@ -117,7 +119,7 @@ def test_history_filters_by_document_id():
         (unique, doc_id + 1, base + timedelta(minutes=1)),
         (unique, doc_id, base + timedelta(minutes=2)),
     ]
-    _insert_audit_logs(entries)
+    _insert_audit_logs(entries, unique)
 
     resp = client.get(f"/api/history?entity_id={doc_id}&action_type={unique}&limit=10", headers=headers)
     assert resp.status_code == 200
@@ -126,3 +128,17 @@ def test_history_filters_by_document_id():
     for item in data["items"]:
         assert item["document_id"] == doc_id
     assert data["total"] == 2
+
+
+def test_history_only_shows_the_requesting_users_events():
+    owner = f"owner_{uuid.uuid4().hex[:8]}"
+    other = f"other_{uuid.uuid4().hex[:8]}"
+    action = f"private_{uuid.uuid4().hex[:8]}"
+    _, _ = _get_authenticated_client(owner)
+    other_client, other_headers = _get_authenticated_client(other)
+
+    _insert_audit_logs([(action, 1, datetime(2026, 5, 1, tzinfo=timezone.utc))], owner)
+
+    resp = other_client.get(f"/api/history?action_type={action}", headers=other_headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [], "total": 0}

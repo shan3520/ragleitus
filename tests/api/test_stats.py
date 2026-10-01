@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.errors import NoSearchActivityError
 from app.core.middleware import rate_limiter
+from tests.helpers import login, user_id_for
 from app.db.database import get_db
 from app.services.document_service import create_document_with_chunks
 
@@ -35,13 +36,14 @@ def test_document_stats_endpoint():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
     try:
         create_document_with_chunks(
             session=db,
-            user_id=unique_user,
+            user_id=uid,
             title="Doc 1",
             content="Sample text",
             chunk_contents=["Chunk A", "Chunk B"],
@@ -83,6 +85,7 @@ def test_popular_searches_endpoint():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -90,7 +93,7 @@ def test_popular_searches_endpoint():
         from app.models.document import SearchQueryLog
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
-        logs = [SearchQueryLog(query_text="popular_query", timestamp=now) for _ in range(5)]
+        logs = [SearchQueryLog(user_id=uid, query_text="popular_query", timestamp=now) for _ in range(5)]
         db.add_all(logs)
         db.commit()
     finally:
@@ -127,6 +130,7 @@ def test_popular_documents_endpoint():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -135,12 +139,12 @@ def test_popular_documents_endpoint():
         from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
-        doc = Document(title="PopDoc", status="ready")
+        doc = Document(user_id=uid, title="PopDoc", status="ready")
         db.add(doc)
         db.commit()
         doc_id = doc.id
         
-        log = SearchQueryLog(query_text="pop_doc_query", timestamp=now)
+        log = SearchQueryLog(user_id=uid, query_text="pop_doc_query", timestamp=now)
         db.add(log)
         db.commit()
         
@@ -181,6 +185,7 @@ def test_popular_searches_honors_days_and_raises_on_empty_window():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     # With zero search logs, the request must surface NoSearchActivityError
     # rather than quietly returning 200 OK with an empty list.
@@ -194,8 +199,8 @@ def test_popular_searches_honors_days_and_raises_on_empty_window():
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         logs = (
-            [SearchQueryLog(query_text="fresh_query", timestamp=now) for _ in range(2)]
-            + [SearchQueryLog(query_text="stale_query", timestamp=now - timedelta(days=20))]
+            [SearchQueryLog(user_id=uid, query_text="fresh_query", timestamp=now) for _ in range(2)]
+            + [SearchQueryLog(user_id=uid, query_text="stale_query", timestamp=now - timedelta(days=20))]
         )
         db.add_all(logs)
         db.commit()
@@ -236,6 +241,7 @@ def test_popular_documents_honors_days_and_raises_on_empty_window():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     # Zero activity in the requested window: error state, not an empty 200.
     with pytest.raises(NoSearchActivityError):
@@ -248,14 +254,14 @@ def test_popular_documents_honors_days_and_raises_on_empty_window():
         from app.models.document import SearchQueryLog, DocumentRetrievalLog, Document
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
-        doc_fresh = Document(title="FreshDoc", status="ready")
-        doc_stale = Document(title="StaleDoc", status="ready")
+        doc_fresh = Document(user_id=uid, title="FreshDoc", status="ready")
+        doc_stale = Document(user_id=uid, title="StaleDoc", status="ready")
         db.add_all([doc_fresh, doc_stale])
         db.commit()
         fresh_doc_id, stale_doc_id = doc_fresh.id, doc_stale.id
 
-        fresh_log = SearchQueryLog(query_text="fresh_doc_query", timestamp=now)
-        stale_log = SearchQueryLog(query_text="stale_doc_query", timestamp=now - timedelta(days=20))
+        fresh_log = SearchQueryLog(user_id=uid, query_text="fresh_doc_query", timestamp=now)
+        stale_log = SearchQueryLog(user_id=uid, query_text="stale_doc_query", timestamp=now - timedelta(days=20))
         db.add_all([fresh_log, stale_log])
         db.commit()
 
@@ -313,6 +319,7 @@ def test_underperforming_documents_endpoint():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -324,14 +331,14 @@ def test_underperforming_documents_endpoint():
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         
-        doc1 = Document(title="Doc 1", status="ready", user_id=unique_user)
-        doc2 = Document(title="Doc 2", status="ready", user_id=unique_user)
-        doc3 = Document(title="Doc 3", status="ready", user_id=unique_user)
+        doc1 = Document(title="Doc 1", status="ready", user_id=uid)
+        doc2 = Document(title="Doc 2", status="ready", user_id=uid)
+        doc3 = Document(title="Doc 3", status="ready", user_id=uid)
         db.add_all([doc1, doc2, doc3])
         db.commit()
         doc1_id, doc2_id, doc3_id = doc1.id, doc2.id, doc3.id
         
-        log = SearchQueryLog(query_text="bad_doc_query", timestamp=now)
+        log = SearchQueryLog(user_id=uid, query_text="bad_doc_query", timestamp=now)
         db.add(log)
         db.commit()
         
@@ -414,6 +421,7 @@ def test_underperforming_documents_excludes_zero_returns_and_honors_min_shown():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -424,14 +432,14 @@ def test_underperforming_documents_excludes_zero_returns_and_honors_min_shown():
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
 
-        doc_zero = Document(title="Zero returns", status="ready", user_id=unique_user)
-        doc_mid = Document(title="Mid traffic", status="ready", user_id=unique_user)
-        doc_high = Document(title="High traffic", status="ready", user_id=unique_user)
+        doc_zero = Document(title="Zero returns", status="ready", user_id=uid)
+        doc_mid = Document(title="Mid traffic", status="ready", user_id=uid)
+        doc_high = Document(title="High traffic", status="ready", user_id=uid)
         db.add_all([doc_zero, doc_mid, doc_high])
         db.commit()
         doc_zero_id, doc_mid_id, doc_high_id = doc_zero.id, doc_mid.id, doc_high.id
 
-        log = SearchQueryLog(query_text="min_shown probe", timestamp=now)
+        log = SearchQueryLog(user_id=uid, query_text="min_shown probe", timestamp=now)
         db.add(log)
         db.commit()
 
@@ -490,6 +498,7 @@ def test_search_latency_endpoint_honors_days():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -498,8 +507,8 @@ def test_search_latency_endpoint_honors_days():
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         logs = (
-            [SearchQueryLog(query_text="fresh", timestamp=now, duration_ms=100.0) for _ in range(2)]
-            + [SearchQueryLog(query_text="stale", timestamp=now - timedelta(days=20), duration_ms=5000.0)]
+            [SearchQueryLog(user_id=uid, query_text="fresh", timestamp=now, duration_ms=100.0) for _ in range(2)]
+            + [SearchQueryLog(user_id=uid, query_text="stale", timestamp=now - timedelta(days=20), duration_ms=5000.0)]
         )
         db.add_all(logs)
         db.commit()
@@ -547,7 +556,8 @@ def test_dead_documents_no_activity_returns_plain_text_not_json():
     _wipe_documents_and_logs()
 
     client = TestClient(app)
-    resp = client.get("/stats/dead-documents?days=30")
+    headers, _ = login(client, f"dead_docs_user_{uuid.uuid4().hex[:8]}")
+    resp = client.get("/stats/dead-documents?days=30", headers=headers)
 
     assert resp.status_code == 400
     assert resp.headers["content-type"].startswith("text/plain")
@@ -558,7 +568,7 @@ def test_dead_documents_no_activity_returns_plain_text_not_json():
         json.loads(resp.text)
 
     # The un-prefixed alias on the stats router serves the same payload.
-    resp_alias = client.get("/dead-documents?days=30")
+    resp_alias = client.get("/dead-documents?days=30", headers=headers)
     assert resp_alias.status_code == 400
     assert resp_alias.headers["content-type"].startswith("text/plain")
 
@@ -568,6 +578,8 @@ def test_dead_documents_sorted_newest_first():
     _wipe_documents_and_logs()
 
     unique_user = f"dead_docs_user_{uuid.uuid4().hex[:8]}"
+    client = TestClient(app)
+    headers, uid = login(client, unique_user)
     now = datetime.utcnow()
 
     db_gen = get_db()
@@ -576,7 +588,7 @@ def test_dead_documents_sorted_newest_first():
     try:
         from app.models.document import Document, SearchQueryLog
         # Search activity inside the window so dead documents can be determined.
-        db.add(SearchQueryLog(query_text="dead docs probe", timestamp=now))
+        db.add(SearchQueryLog(user_id=uid, query_text="dead docs probe", timestamp=now))
         db.commit()
 
         # Insert oldest-created document first so table insertion order is the
@@ -584,7 +596,7 @@ def test_dead_documents_sorted_newest_first():
         # insertion/rowid order would come back oldest-first and fail below.
         for title, age_days in (("oldest", 60), ("middle", 50), ("newest", 40)):
             doc = Document(
-                user_id=unique_user,
+                user_id=uid,
                 title=title,
                 status="ready",
                 created_at=now - timedelta(days=age_days),
@@ -596,8 +608,7 @@ def test_dead_documents_sorted_newest_first():
         db.close()
 
     try:
-        client = TestClient(app)
-        resp = client.get("/stats/dead-documents?days=30")
+        resp = client.get("/stats/dead-documents?days=30", headers=headers)
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 3
@@ -617,6 +628,8 @@ def test_dead_documents_response_contains_only_id_title_created_at():
     _wipe_documents_and_logs()
 
     unique_user = f"dead_docs_user_{uuid.uuid4().hex[:8]}"
+    client = TestClient(app)
+    headers, uid = login(client, unique_user)
     now = datetime.utcnow()
 
     db_gen = get_db()
@@ -624,10 +637,10 @@ def test_dead_documents_response_contains_only_id_title_created_at():
     dead_id = None
     try:
         from app.models.document import Document, SearchQueryLog
-        db.add(SearchQueryLog(query_text="dead docs fields probe", timestamp=now))
+        db.add(SearchQueryLog(user_id=uid, query_text="dead docs fields probe", timestamp=now))
         db.commit()
         doc = Document(
-            user_id=unique_user,
+            user_id=uid,
             title="field probe",
             status="ready",
             content="internal payload that must not leak",
@@ -640,8 +653,7 @@ def test_dead_documents_response_contains_only_id_title_created_at():
         db.close()
 
     try:
-        client = TestClient(app)
-        resp = client.get("/stats/dead-documents?days=30")
+        resp = client.get("/stats/dead-documents?days=30", headers=headers)
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
@@ -685,6 +697,7 @@ def test_underperforming_documents_endpoint_applies_no_popularity_floor():
 
     unique_user = f"stats_user_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -695,13 +708,13 @@ def test_underperforming_documents_endpoint_applies_no_popularity_floor():
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
 
-        unpopular = Document(title="Niche but disliked", status="ready", user_id=unique_user)
-        popular = Document(title="Busy and mostly fine", status="ready", user_id=unique_user)
+        unpopular = Document(title="Niche but disliked", status="ready", user_id=uid)
+        popular = Document(title="Busy and mostly fine", status="ready", user_id=uid)
         db.add_all([unpopular, popular])
         db.commit()
         unpopular_id, popular_id = unpopular.id, popular.id
 
-        log = SearchQueryLog(query_text="popularity probe", timestamp=now)
+        log = SearchQueryLog(user_id=uid, query_text="popularity probe", timestamp=now)
         db.add(log)
         db.commit()
 
@@ -754,3 +767,9 @@ def test_underperforming_documents_endpoint_applies_no_popularity_floor():
             cleanup_db.commit()
         finally:
             cleanup_db.close()
+
+
+def test_dead_documents_requires_authentication():
+    client = TestClient(app)
+    assert client.get("/stats/dead-documents").status_code == 401
+    assert client.get("/dead-documents").status_code == 401

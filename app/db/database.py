@@ -1,43 +1,33 @@
-import os
-from sqlalchemy import create_engine
+"""Database engine and session factory.
+
+The schema is owned by Alembic (`alembic upgrade head`); nothing here creates
+or alters tables.
+"""
+
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
+from app.core.config import settings
 from app.models import Base
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./app.db")
+DATABASE_URL = settings.database_url
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Auto-create tables for SQLite / local development
-Base.metadata.create_all(bind=engine)
 
 if DATABASE_URL.startswith("sqlite"):
-    from sqlalchemy import text
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE query_clusters ADD COLUMN last_resolved_query_timestamp DATETIME"))
-    except Exception:
-        pass
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE documents ADD COLUMN created_at DATETIME"))
-    except Exception:
-        pass
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE search_query_logs ADD COLUMN duration_ms FLOAT"))
-    except Exception:
-        pass
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE unmatched_searches ADD COLUMN duration_ms FLOAT"))
-    except Exception:
-        pass
+
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():

@@ -62,18 +62,18 @@ from datetime import datetime, timezone
 from app.models.document import UnmatchedSearch, SearchQueryLog, DocumentRetrievalLog
 
 
-def _log_unmatched_search(session: Session, query: str, duration_ms: float | None = None) -> None:
+def _log_unmatched_search(session: Session, query: str, duration_ms: float | None = None, user_id: int | None = None) -> None:
     try:
-        unmatched = UnmatchedSearch(query_text=query, duration_ms=duration_ms, timestamp=datetime.now(timezone.utc))
+        unmatched = UnmatchedSearch(user_id=user_id, query_text=query, duration_ms=duration_ms, timestamp=datetime.now(timezone.utc))
         session.add(unmatched)
         session.commit()
     except Exception:
         pass
 
 
-def _log_search(session: Session, query: str, matched_doc_ids: list[int], duration_ms: float | None = None) -> None:
+def _log_search(session: Session, query: str, matched_doc_ids: list[int], duration_ms: float | None = None, user_id: int | None = None) -> None:
     try:
-        query_log = SearchQueryLog(query_text=query, duration_ms=duration_ms, timestamp=datetime.now(timezone.utc))
+        query_log = SearchQueryLog(user_id=user_id, query_text=query, duration_ms=duration_ms, timestamp=datetime.now(timezone.utc))
         session.add(query_log)
         session.flush()
         
@@ -84,6 +84,25 @@ def _log_search(session: Session, query: str, matched_doc_ids: list[int], durati
         session.commit()
     except Exception:
         pass
+
+
+def mark_retrieval_opened(session: Session, user_id: int, search_id: int, document_id: int) -> bool:
+    """Record when the user opened a document returned by one of their searches."""
+    retrieval_log = (
+        session.query(DocumentRetrievalLog)
+        .join(SearchQueryLog, DocumentRetrievalLog.query_log_id == SearchQueryLog.id)
+        .filter(
+            DocumentRetrievalLog.query_log_id == search_id,
+            DocumentRetrievalLog.document_id == document_id,
+            SearchQueryLog.user_id == user_id,
+        )
+        .first()
+    )
+    if retrieval_log is None:
+        return False
+    retrieval_log.opened_at = datetime.now(timezone.utc)
+    session.flush()
+    return True
 
 
 def search_documents_paginated(
@@ -98,6 +117,7 @@ def search_documents_paginated(
     session: Session | None = None,
     limit: int = 10,
     offset: int = 0,
+    user_id: int | None = None,
 ) -> tuple[int, list[SearchMatch]]:
     """
     Perform a keyword search over documents, returning matches ordered by
@@ -162,10 +182,10 @@ def search_documents_paginated(
     if background_tasks and session:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         if not matches:
-            background_tasks.add_task(_log_unmatched_search, session, query, duration_ms=duration_ms)
+            background_tasks.add_task(_log_unmatched_search, session, query, duration_ms=duration_ms, user_id=user_id)
         else:
             matched_ids = [m.document_id for m in matches]
-            background_tasks.add_task(_log_search, session, query, matched_ids, duration_ms=duration_ms)
+            background_tasks.add_task(_log_search, session, query, matched_ids, duration_ms=duration_ms, user_id=user_id)
 
     total_matches = len(matches)
     items = matches[offset : offset + limit]
@@ -182,6 +202,7 @@ def search_documents(
     get_group_id: callable = lambda doc: getattr(doc, "group_id", None),
     background_tasks: BackgroundTasks | None = None,
     session: Session | None = None,
+    user_id: int | None = None,
 ) -> list[SearchMatch]:
     """
     Backward-compatible wrapper around :func:`search_documents_paginated`
@@ -211,5 +232,6 @@ def search_documents(
         background_tasks=background_tasks,
         session=session,
         limit=len(docs),
+        user_id=user_id,
     )
     return items

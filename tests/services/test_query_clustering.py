@@ -56,7 +56,8 @@ def test_mark_cluster_handled():
         from app.models.query_cluster import QueryCluster
         from app.models.document import Document
         
-        doc = Document(user_id="test_user", title="Test", content="Content", status="completed")
+        from tests.helpers import make_user
+        doc = Document(user_id=make_user(db).id, title="Test", content="Content", status="completed")
         db.add(doc)
         db.commit()
         

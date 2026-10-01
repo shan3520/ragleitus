@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.core.middleware import rate_limiter
+from tests.helpers import make_user, user_id_for
 from app.db.database import get_db
 from app.models.document import UnmatchedSearch
 
@@ -22,6 +23,7 @@ def _get_authenticated_client(username: str):
 def test_recent_unanswered_queries():
     unique_user = f"user_recent_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -32,9 +34,9 @@ def test_recent_unanswered_queries():
         db.query(UnmatchedSearch).delete()
         
         # Insert a few searches
-        db.add(UnmatchedSearch(query_text="recent 1", timestamp=datetime.datetime(2023, 1, 1, 12, 0, 0)))
-        db.add(UnmatchedSearch(query_text="recent 2", timestamp=datetime.datetime(2023, 1, 2, 12, 0, 0)))
-        db.add(UnmatchedSearch(query_text="recent 3", timestamp=datetime.datetime(2023, 1, 3, 12, 0, 0)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="recent 1", timestamp=datetime.datetime(2023, 1, 1, 12, 0, 0)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="recent 2", timestamp=datetime.datetime(2023, 1, 2, 12, 0, 0)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="recent 3", timestamp=datetime.datetime(2023, 1, 3, 12, 0, 0)))
         db.commit()
     finally:
         db.close()
@@ -57,6 +59,7 @@ def test_recent_unanswered_queries():
 def test_frequent_unanswered_queries():
     unique_user = f"user_frequent_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -67,11 +70,11 @@ def test_frequent_unanswered_queries():
 
         # Insert multiple identical searches to test grouping
         for _ in range(3):
-            db.add(UnmatchedSearch(query_text="apple"))
+            db.add(UnmatchedSearch(user_id=uid, query_text="apple"))
         for _ in range(5):
-            db.add(UnmatchedSearch(query_text="banana"))
+            db.add(UnmatchedSearch(user_id=uid, query_text="banana"))
         for _ in range(1):
-            db.add(UnmatchedSearch(query_text="cherry"))
+            db.add(UnmatchedSearch(user_id=uid, query_text="cherry"))
         db.commit()
     finally:
         db.close()
@@ -106,6 +109,7 @@ def test_frequent_unanswered_queries():
 def test_frequent_unanswered_queries_filters_old_searches():
     unique_user = f"user_frequent_window_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     now = datetime.datetime.now(timezone.utc)
     db_gen = get_db()
@@ -117,13 +121,13 @@ def test_frequent_unanswered_queries_filters_old_searches():
 
         # 'legacy query' lives entirely outside the window
         for _ in range(4):
-            db.add(UnmatchedSearch(query_text="legacy query", timestamp=now - timedelta(days=60)))
+            db.add(UnmatchedSearch(user_id=uid, query_text="legacy query", timestamp=now - timedelta(days=60)))
 
         # 'fresh query' has one OLD occurrence alongside two recent ones:
         # aggregating before filtering would wrongly count it as 3
-        db.add(UnmatchedSearch(query_text="fresh query", timestamp=now - timedelta(days=60)))
-        db.add(UnmatchedSearch(query_text="fresh query", timestamp=now - timedelta(hours=1)))
-        db.add(UnmatchedSearch(query_text="fresh query", timestamp=now - timedelta(hours=2)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="fresh query", timestamp=now - timedelta(days=60)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="fresh query", timestamp=now - timedelta(hours=1)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="fresh query", timestamp=now - timedelta(hours=2)))
         db.commit()
     finally:
         db.close()
@@ -150,6 +154,7 @@ def test_frequent_unanswered_queries_filters_old_searches():
 def test_frequent_unanswered_queries_empty_state_message():
     unique_user = f"user_frequent_empty_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     now = datetime.datetime.now(timezone.utc)
     db_gen = get_db()
@@ -160,7 +165,7 @@ def test_frequent_unanswered_queries_empty_state_message():
         db.query(UnmatchedSearch).delete()
 
         # Only stale activity: nothing inside the requested window
-        db.add(UnmatchedSearch(query_text="stale query", timestamp=now - timedelta(days=60)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="stale query", timestamp=now - timedelta(days=60)))
         db.commit()
     finally:
         db.close()
@@ -177,6 +182,7 @@ def test_frequent_unanswered_queries_empty_state_message():
 def test_clustered_unanswered_queries():
     unique_user = f"user_clustered_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -186,21 +192,26 @@ def test_clustered_unanswered_queries():
         db.query(UnmatchedSearch).delete()
 
         # Insert some similar queries
-        db.add(UnmatchedSearch(query_text="how to reset password", timestamp=datetime.datetime(2023, 1, 1, 12, 0, 0)))
-        db.add(UnmatchedSearch(query_text="reset password", timestamp=datetime.datetime(2023, 1, 2, 12, 0, 0)))
-        db.add(UnmatchedSearch(query_text="forgot password", timestamp=datetime.datetime(2023, 1, 3, 12, 0, 0)))
-        db.add(UnmatchedSearch(query_text="apple", timestamp=datetime.datetime(2023, 1, 4, 12, 0, 0)))
-        db.add(UnmatchedSearch(query_text="apples", timestamp=datetime.datetime(2023, 1, 5, 12, 0, 0)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="how to reset password", timestamp=datetime.datetime(2023, 1, 1, 12, 0, 0)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="reset password", timestamp=datetime.datetime(2023, 1, 2, 12, 0, 0)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="forgot password", timestamp=datetime.datetime(2023, 1, 3, 12, 0, 0)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="apple", timestamp=datetime.datetime(2023, 1, 4, 12, 0, 0)))
+        db.add(UnmatchedSearch(user_id=uid, query_text="apples", timestamp=datetime.datetime(2023, 1, 5, 12, 0, 0)))
         db.commit()
+
+        from app.models.document import Document
+        resolving_doc = Document(user_id=uid, title="Password reset guide")
+        db.add(resolving_doc)
+        db.flush()
 
         # Mark "apple" cluster as handled
         apple_search = db.query(UnmatchedSearch).filter(UnmatchedSearch.query_text == "apple").first()
-        handled_cluster = QueryCluster(id=apple_search.id, status="handled", resolved_by_document_id=1, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
+        handled_cluster = QueryCluster(id=apple_search.id, status="handled", resolved_by_document_id=resolving_doc.id, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
         db.add(handled_cluster)
         
         # Add a "regression" cluster
         regression_search = db.query(UnmatchedSearch).filter(UnmatchedSearch.query_text == "apples").first()
-        regression_cluster = QueryCluster(id=regression_search.id, status="regression", resolved_by_document_id=1, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
+        regression_cluster = QueryCluster(id=regression_search.id, status="regression", resolved_by_document_id=resolving_doc.id, resolved_at=datetime.datetime(2023, 1, 6, 12, 0, 0))
         db.add(regression_cluster)
         db.commit()
     finally:
@@ -249,6 +260,7 @@ def test_clustered_unanswered_queries_auth():
 def test_mark_cluster_handled_api():
     unique_user = f"user_cluster_patch_{uuid.uuid4().hex[:8]}"
     client, headers = _get_authenticated_client(unique_user)
+    uid = user_id_for(unique_user)
 
     db_gen = get_db()
     db = next(db_gen)
@@ -260,17 +272,17 @@ def test_mark_cluster_handled_api():
         db.query(QueryCluster).delete()
         db.query(UnmatchedSearch).delete()
         
-        doc = Document(user_id=unique_user, title="Test Doc", content="Content", status="completed")
+        doc = Document(user_id=uid, title="Test Doc", content="Content", status="completed")
         db.add(doc)
         db.commit()
 
         # create a search so the cluster has an id
-        search1 = UnmatchedSearch(query_text="cluster test query", timestamp=datetime.datetime(2023, 5, 1, 10, 0, 0))
+        search1 = UnmatchedSearch(user_id=uid, query_text="cluster test query", timestamp=datetime.datetime(2023, 5, 1, 10, 0, 0))
         db.add(search1)
         db.commit()
         
         # create a similar search with a later timestamp
-        search2 = UnmatchedSearch(query_text="cluster test query", timestamp=datetime.datetime(2023, 5, 2, 10, 0, 0))
+        search2 = UnmatchedSearch(user_id=uid, query_text="cluster test query", timestamp=datetime.datetime(2023, 5, 2, 10, 0, 0))
         db.add(search2)
         db.commit()
 
@@ -294,7 +306,7 @@ def test_mark_cluster_handled_api():
         resp_404 = client.patch(f"/api/unanswered-queries/clusters/{cluster_id}", json={"document_id": 99999}, headers=headers)
         assert resp_404.status_code == 404
         
-        other_doc = Document(user_id="other_user", title="Other", content="Other", status="completed")
+        other_doc = Document(user_id=make_user(db).id, title="Other", content="Other", status="completed")
         db.add(other_doc)
         db.commit()
         other_doc_id = other_doc.id

@@ -1,96 +1,78 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, status
-from pydantic import BaseModel
-import hashlib
-import hmac
-import base64
-import time
-import secrets
+from datetime import datetime
 
-# Simple HMAC-based token scheme for tests (keeps implementation self-contained)
-SECRET = "test-secret-key"
-TOKEN_TTL = 3600  # seconds
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-USERS: dict[str, dict] = {}
+from app.api.deps import get_current_user
+from app.db.database import get_db
+from app.models.user import User
+from app.services import auth_service
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
 
 class RegisterRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=3, max_length=150)
+    password: str = Field(min_length=8, max_length=256)
+
 
 class LoginRequest(BaseModel):
     username: str
     password: str
 
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
+
 class UserOut(BaseModel):
+    id: int
     username: str
-
-router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-def _hash_password(salt: str, password: str) -> str:
-    return hashlib.sha256((salt + password).encode()).hexdigest()
+    created_at: datetime
 
 
-def _sign_payload(payload: str) -> str:
-    sig = hmac.new(SECRET.encode(), payload.encode(), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(sig).decode().rstrip("=")
-
-
-def _verify_signature(payload: str, signature: str) -> bool:
-    expected = _sign_payload(payload)
-    return hmac.compare_digest(expected, signature)
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-def register(req: RegisterRequest):
-    if req.username in USERS:
+def register(req: RegisterRequest, session: Session = Depends(get_db)):
+    try:
+        user = auth_service.register_user(session, req.username, req.password)
+    except auth_service.UsernameTakenError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already exists")
-    salt = secrets.token_hex(8)
-    USERS[req.username] = {"salt": salt, "password": _hash_password(salt, req.password)}
-    return {"username": req.username}
+    session.commit()
+    return {"id": user.id, "username": user.username}
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(req: LoginRequest):
-    user = USERS.get(req.username)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    if _hash_password(user["salt"], req.password) != user["password"]:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-
-    ts = str(int(time.time()))
-    payload = f"{req.username}:{ts}"
-    sig = _sign_payload(payload)
-    token = f"{req.username}.{ts}.{sig}"
-    return {"access_token": token, "token_type": "bearer"}
-
-
-async def get_current_user(authorization: str | None = Header(default=None)) -> dict:
-    if not authorization:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authorization header")
-    if not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authorization header")
-    token = authorization.split(" ", 1)[1]
-    parts = token.split(".")
-    if len(parts) != 3:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token format")
-    username, ts, sig = parts
-    payload = f"{username}:{ts}"
-    if not _verify_signature(payload, sig):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token signature")
+def login(req: LoginRequest, session: Session = Depends(get_db)):
     try:
-        if int(time.time()) - int(ts) > TOKEN_TTL:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token timestamp")
-    if username not in USERS:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    return {"username": username}
+        user = auth_service.authenticate(session, req.username, req.password)
+    except auth_service.InvalidCredentialsError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    session.commit()
+    return {"access_token": auth_service.create_access_token(user), "token_type": "bearer"}
 
 
 @router.get("/me", response_model=UserOut)
-async def me(user: dict = Depends(get_current_user)) -> dict:
-    return {"username": user["username"]}
+def me(user: User = Depends(get_current_user)):
+    return user
+
+
+@router.patch("/me/password", response_model=TokenResponse)
+def change_password(
+    req: PasswordChangeRequest,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+):
+    try:
+        auth_service.change_password(session, user, req.current_password, req.new_password)
+    except auth_service.InvalidCredentialsError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+    session.commit()
+    # Earlier tokens, including the one used for this request, stop working; here is a fresh one.
+    return {"access_token": auth_service.create_access_token(user), "token_type": "bearer"}

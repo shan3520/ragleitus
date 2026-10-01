@@ -15,6 +15,7 @@ def combine_scores(
     session: Session | None = None,
     skip: int = 0,
     limit: int = 20,
+    user_id: int | None = None,
 ) -> dict:
     start_time = time.perf_counter()
 
@@ -28,11 +29,11 @@ def combine_scores(
     if background_tasks and session and query is not None:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         if not combined:
-            background_tasks.add_task(_log_unmatched_search, session, query, duration_ms=duration_ms)
+            background_tasks.add_task(_log_unmatched_search, session, query, duration_ms=duration_ms, user_id=user_id)
         else:
             try:
                 matched_ids = [int(k) for k in combined.keys()]
-                background_tasks.add_task(_log_search, session, query, matched_ids, duration_ms=duration_ms)
+                background_tasks.add_task(_log_search, session, query, matched_ids, duration_ms=duration_ms, user_id=user_id)
             except ValueError:
                 pass
 

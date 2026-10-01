@@ -17,14 +17,15 @@ config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
 
-# Import the application's Base metadata and models to populate target_metadata
-# Base is exposed from app.db.database (which delegates to app.models)
-try:
-    from app.db.database import Base
-    import app.models  # noqa: F401 (ensure models are imported)
-except Exception:
-    # If import fails, let the error surface when Alembic runs; keeping silent may hide problems
-    raise
+# Import the application's models to populate target_metadata.
+from app.models import Base  # noqa: E402
+
+# An explicit sqlalchemy.url (set by tests or on the command line) wins;
+# otherwise use the application's configured database.
+if not config.get_main_option("sqlalchemy.url"):
+    from app.core.config import settings
+
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
@@ -37,6 +38,22 @@ def run_migrations_offline():
         context.run_migrations()
 
 
+def _widen_version_table(connection):
+    """Some revision ids here are longer than the VARCHAR(32) Alembic gives
+    alembic_version.version_num by default. SQLite ignores the length;
+    PostgreSQL rejects the update. Create or widen the column before
+    migrating (this also unsticks a database that stopped at 0012)."""
+    if connection.dialect.name != "postgresql":
+        return
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS alembic_version ("
+        "version_num VARCHAR(255) NOT NULL, "
+        "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+    )
+    connection.exec_driver_sql("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)")
+    connection.commit()
+
+
 def run_migrations_online():
     connectable = engine_from_config(
         config.get_section(config.config_ini_section),
@@ -45,6 +62,7 @@ def run_migrations_online():
     )
 
     with connectable.connect() as connection:
+        _widen_version_table(connection)
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
 
         with context.begin_transaction():

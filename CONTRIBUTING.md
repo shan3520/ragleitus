@@ -1,4 +1,4 @@
-# Conventions for agents working in this repo
+# Contributing
 
 Read this before adding a file. These are not preferences — breaking them
 produces work that passes the build and still has to be undone.
@@ -19,10 +19,9 @@ tests/             mirrors the app/ tree
 alembic/           migrations
 ```
 
-**Do not create a `src/` directory.** Early on, two agents independently chose
-two different roots, each passed the build, and the result was a codebase split
-down the middle. That tree has since been consolidated into `app/`, and `src/`
-is git-ignored so it cannot come back by accident.
+**Do not create a `src/` directory.** A second root splits the codebase down
+the middle while still passing the build. `src/` is git-ignored so it cannot
+come back by accident.
 
 ## Layering
 

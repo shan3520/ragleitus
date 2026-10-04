@@ -1,10 +1,10 @@
-# RAGForge Autonomous Build Specification
+# RAGForge Product Specification
 
 > Purpose: Build a production-quality AI engineering platform for
 > Retrieval-Augmented Generation (RAG), multi-provider LLM
 > experimentation, telemetry, and evaluation. This document
-> intentionally specifies product decisions while leaving low-level
-> implementation choices to the coding agent.
+> intentionally specifies product decisions and leaves low-level
+> implementation choices open.
 
 ------------------------------------------------------------------------
 
@@ -190,13 +190,10 @@ application. - Another developer can run the project from the README.
 
 ------------------------------------------------------------------------
 
-# 12. Guidance for the Autonomous Agent
+# 12. Engineering Principles
 
 -   Prefer maintainability over cleverness.
 -   Keep the code modular.
--   Make reasonable implementation decisions where this specification
-    intentionally omits low-level details.
--   Document assumptions in the README instead of asking follow-up
-    questions.
+-   Document assumptions in the README.
 -   Produce production-quality code with meaningful tests and
     documentation.

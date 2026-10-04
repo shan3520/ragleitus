@@ -142,7 +142,7 @@ flowchart LR
 
 - **Layers.** Route handlers in `app/api` only parse requests and call services.
   Business logic lives in `app/services`, and tables in `app/models`
-  (see [AGENTS.md](AGENTS.md)).
+  (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 - **Where data lives.** Vectors live only in Qdrant, and each point carries only
   ids. Chunk text lives in the SQL `chunks` table. Every vector query is filtered
   by the owner's `user_id`.
@@ -296,3 +296,7 @@ container reach the stub on the host:
 
 Some older endpoints still return placeholder data: `/api/export/metrics`,
 `/api/experiments/report` and `/api/documents/batch-status`.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).

@@ -27,7 +27,7 @@ _real_connect = socket.socket.connect
 
 
 def _no_network(self, address):
-    # Tests must run with no external services (AGENTS.md). Unix sockets and
+    # Tests must run with no external services (CONTRIBUTING.md). Unix sockets and
     # loopback stay available; anything else fails loudly instead of hanging.
     if self.family == socket.AF_UNIX or (isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1", "localhost")):
         return _real_connect(self, address)

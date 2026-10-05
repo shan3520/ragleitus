@@ -37,6 +37,16 @@ def env(request, tmp_path):
 
     search.store, search.embedder = store, embedder
 
+    def add_with(user_id, filename, text, embedder_factory):
+        """Index with the user's embedding choice through a fake provider."""
+        doc = ingestion.create_document(session, user_id, filename, text.encode())
+        session.commit()
+        ingestion.index_document(doc.id, session_factory=factory, store=store, embedder_factory=embedder_factory)
+        session.expire_all()
+        return doc.id
+
+    add.with_choice = add_with
+
     yield session, add, search
     session.close()
     engine.dispose()
@@ -148,3 +158,60 @@ def test_does_not_embed_the_query_without_ready_documents(env):
             raise AssertionError("embedded a query with nothing to search")
 
     assert retrieve(session, user.id, "anything", embedder=Unavailable(), store=search.store) == []
+
+
+def _choose(session, user_id, provider):
+    from app.services import embedding_service
+    from tests.fakes import provider_embedder_factory
+
+    embedding_service.save_choice(session, user_id, provider, None, factory=provider_embedder_factory())
+    session.commit()
+
+
+def test_documents_embedded_with_different_models_are_all_searched(env, vector_stores):
+    from tests.fakes import provider_embedder_factory
+
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+    local_doc = add(user.id, "hr.txt", "Employees receive 25 days of annual leave.")
+    _choose(session, user.id, "openai")
+    factory = provider_embedder_factory()
+    remote_doc = add.with_choice(user.id, "it.txt", "Passwords must be rotated every 90 days.", factory)
+
+    leave = search(user.id, "annual leave days", embedder_factory=factory)
+    passwords = search(user.id, "how often are passwords rotated", embedder_factory=factory)
+
+    assert leave[0].document_id == local_doc and leave[0].dense_rank == 1
+    assert passwords[0].document_id == remote_doc and passwords[0].dense_rank == 1
+    # Each provider call is in telemetry: the settings check, indexing, and one
+    # question embedding per search.
+    from app.models.telemetry_event import TelemetryEvent
+
+    assert session.query(TelemetryEvent).filter_by(operation="embedding").count() == 4
+
+
+def test_a_provider_that_cannot_be_used_falls_back_to_keywords_with_a_warning(env, vector_stores):
+    from app.services.llm import ProviderError
+    from tests.fakes import provider_embedder_factory
+
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+    _choose(session, user.id, "openai")
+    doc = add.with_choice(user.id, "it.txt", "Passwords must be rotated every 90 days.", provider_embedder_factory())
+
+    warnings: list[str] = []
+    down = provider_embedder_factory(fail=ProviderError("OpenAI returned HTTP 503: overloaded", 503))
+    results = search(user.id, "passwords rotated", embedder_factory=down, warnings=warnings)
+    assert [r.document_id for r in results] == [doc]
+    assert results[0].dense_rank is None and results[0].keyword_rank == 1
+    assert warnings == [
+        "1 document embedded with openai/text-embedding-3-small could only be searched by keyword: "
+        "OpenAI returned HTTP 503: overloaded"
+    ]
+
+    # The real factory: no key stored for OpenAI.
+    warnings.clear()
+    assert search(user.id, "passwords rotated", warnings=warnings)
+    assert "No API key stored for OpenAI" in warnings[0]

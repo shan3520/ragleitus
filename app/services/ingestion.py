@@ -29,11 +29,14 @@ from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models.document import Chunk, Document
 from app.services.chunking import chunk_text
-from app.services.embeddings import Embedder, get_embedder
+from app.services import embedding_service
+from app.services.embedding_service import EmbedderFactory, EmbeddingChoice, EmbeddingUnavailable
+from app.services.embeddings import Embedder
+from app.services.llm.base import ProviderError
 from app.services.pdf_extraction import extract_pdf_pages
 from app.services.text_cleaning import clean_text_pages
 from app.services.token_estimation import estimate_token_count
-from app.services.vector_store import ChunkVector, VectorStore, get_vector_store
+from app.services.vector_store import ChunkVector, VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -200,8 +203,14 @@ def index_document(
     session_factory: Callable[[], Session] = SessionLocal,
     embedder: Embedder | None = None,
     store: VectorStore | None = None,
+    embedder_factory: EmbedderFactory | None = None,
 ) -> None:
     """Chunk, embed and store a document's vectors, replacing any previous index.
+
+    The document is embedded with its owner's embedding choice (see
+    embedding_service), and records which model that was. `embedder` and
+    `store` replace the local model and its store (tests); `embedder_factory`
+    replaces how an embedder is built for the choice.
 
     Never raises: failures are recorded on the document as status "failed"
     with the error, because this usually runs after the response is sent or
@@ -211,17 +220,27 @@ def index_document(
     still owns the document: old chunks are replaced inside its transaction,
     and old vectors are removed only after it has committed.
     """
-    embedder = embedder or get_embedder()
-    store = store or get_vector_store()
     token = str(uuid.uuid4())
     session = session_factory()
     new_chunk_ids: list[int] = []
+    new_store: VectorStore | None = None
+    used: Embedder | None = None
+    user_id: int | None = None
     try:
         document = _claim(session, document_id, token)
         if document is None:
             return
         user_id = document.user_id
         try:
+            # Where the current vectors are, before this run replaces them.
+            old_store = embedding_service.document_store(document, local_store=store)
+            if embedder is not None:
+                choice = EmbeddingChoice(embedding_service.LOCAL, embedder.model_name)
+                used = embedder
+            else:
+                choice = embedding_service.get_choice(session, user_id)
+                used = (embedder_factory or embedding_service.build_embedder)(session, user_id, choice)
+
             chunks = _build_chunks(document)  # before any write, to keep the write transaction short
             old_chunk_ids = [cid for (cid,) in session.query(Chunk.id).filter(Chunk.document_id == document_id)]
             session.query(Chunk).filter(Chunk.document_id == document_id).delete(synchronize_session=False)
@@ -232,52 +251,88 @@ def index_document(
             vectors: list[ChunkVector] = []
             for start in range(0, len(chunks), EMBED_BATCH_SIZE):
                 batch = chunks[start:start + EMBED_BATCH_SIZE]
-                embedded = embedder.embed_documents([c.content for c in batch])
+                embedded = used.embed_documents([c.content for c in batch])
                 vectors.extend(ChunkVector(c.id, c.page_number, v) for c, v in zip(batch, embedded))
-            store.upsert_document(user_id, document_id, vectors)
+            # A provider's vector size is known once it has embedded something.
+            new_store = embedding_service.store_for_choice(choice, used.dimension, local_store=store)
+            if new_store is not None:
+                new_store.upsert_document(user_id, document_id, vectors)
 
             # Finish only if this run still owns the document; the row lock this
             # takes makes a competing claim wait until we have committed.
             finished = (
                 session.query(Document)
                 .filter(Document.id == document_id, Document.index_token == token)
-                .update({Document.status: "ready", Document.index_updated_at: _now()}, synchronize_session=False)
+                .update(
+                    {
+                        Document.status: "ready",
+                        Document.index_updated_at: _now(),
+                        Document.embedding_provider: choice.provider,
+                        Document.embedding_model: choice.model,
+                        Document.embedding_dimension: used.dimension,
+                    },
+                    synchronize_session=False,
+                )
             )
             if not finished:
                 raise _Superseded()
             session.commit()
         except _Superseded:
             session.rollback()
-            _discard_vectors(store, new_chunk_ids, document_id)
+            _discard_vectors(new_store, new_chunk_ids, document_id)
             logger.info("Index run superseded by a newer one", extra={"document_id": document_id})
             return
         except Exception as exc:
             session.rollback()
-            _discard_vectors(store, new_chunk_ids, document_id)
+            _discard_vectors(new_store, new_chunk_ids, document_id)
             failed = (
                 session.query(Document)
                 .filter(Document.id == document_id, Document.index_token == token)
                 .update(
-                    {Document.status: "failed", Document.error: f"{type(exc).__name__}: {exc}"[:1000]},
+                    {Document.status: "failed", Document.error: _failure_message(exc)},
                     synchronize_session=False,
                 )
             )
             session.commit()
-            if failed:
+            if isinstance(exc, (EmbeddingUnavailable, ProviderError)):
+                # The user's setting or their provider; the message says what to do.
+                logger.warning("Indexing failed: %s", _failure_message(exc), extra={"document_id": document_id})
+            elif failed:
                 logger.exception("Indexing failed", extra={"document_id": document_id})
             else:
                 # Deleted or taken over by a newer run meanwhile: nothing to report.
                 logger.info("Indexing stopped; document deleted or re-queued", extra={"document_id": document_id})
             return
         # Committed: the old chunks are gone, so their vectors can go too.
-        _discard_vectors(store, old_chunk_ids, document_id)
+        _discard_vectors(old_store, old_chunk_ids, document_id)
     finally:
+        if used is not None and user_id is not None:
+            _record_embedding_calls(session, user_id, used, document_id)
         session.close()
 
 
-def _discard_vectors(store: VectorStore, chunk_ids: list[int], document_id: int) -> None:
+def _failure_message(exc: Exception) -> str:
+    if isinstance(exc, EmbeddingUnavailable):
+        return str(exc)[:1000]
+    if isinstance(exc, ProviderError):
+        return f"Embedding failed: {exc.message}"[:1000]
+    return f"{type(exc).__name__}: {exc}"[:1000]
+
+
+def _record_embedding_calls(session: Session, user_id: int, embedder: Embedder, document_id: int) -> None:
+    try:
+        embedding_service.record_calls(session, user_id, embedder)
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("Could not record embedding telemetry", extra={"document_id": document_id})
+
+
+def _discard_vectors(store: VectorStore | None, chunk_ids: list[int], document_id: int) -> None:
     """Remove vectors whose chunk rows no longer exist. Leftovers are harmless
     (search ignores vectors without a chunk row), so a failure is only logged."""
+    if store is None or not chunk_ids:
+        return
     try:
         store.delete_points(chunk_ids)
     except Exception:
@@ -394,6 +449,34 @@ def mark_for_reindex(session: Session, user_id: int, document_id: int) -> Docume
     return document
 
 
+def reindexable_document_ids(session: Session, user_id: int) -> list[int]:
+    """The user's documents that have text to index again."""
+    return [
+        doc_id
+        for (doc_id,) in session.query(Document.id)
+        .filter(Document.user_id == user_id, Document.content.isnot(None))
+        .order_by(Document.id)
+    ]
+
+
+def mark_documents_for_reindex(session: Session, user_id: int, document_ids: list[int]) -> list[int]:
+    """mark_for_reindex for several documents; returns the ids that are the user's."""
+    if not document_ids:
+        return []
+    documents = (
+        session.query(Document)
+        .filter(Document.user_id == user_id, Document.id.in_(document_ids), Document.content.isnot(None))
+        .order_by(Document.id)
+        .all()
+    )
+    for document in documents:
+        document.status = "pending"
+        document.error = None
+        document.index_updated_at = _now()
+    session.flush()
+    return [d.id for d in documents]
+
+
 STATUSES = ("pending", "indexing", "ready", "failed")
 
 
@@ -422,7 +505,8 @@ def delete_document(session: Session, user_id: int, document_id: int, store: Vec
     document = session.query(Document).filter(Document.id == document_id, Document.user_id == user_id).first()
     if document is None:
         return False
+    locations = embedding_service.vector_locations(session, user_id, [document_id], local_store=store)
     session.delete(document)
     session.flush()
-    (store or get_vector_store()).delete_documents(user_id, [document_id])
+    embedding_service.delete_vectors(user_id, locations)
     return True

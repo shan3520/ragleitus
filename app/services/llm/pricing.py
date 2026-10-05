@@ -23,6 +23,11 @@ PRICES_PER_MILLION: dict[str, tuple[float, float]] = {
     # OpenAI
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
+    # Embedding models: input tokens only.
+    "text-embedding-3-small": (0.02, 0.0),
+    "text-embedding-3-large": (0.13, 0.0),
+    "gemini-embedding-001": (0.15, 0.0),
+    "mistral-embed": (0.10, 0.0),
     # Groq
     "llama-3.3-70b-versatile": (0.59, 0.79),
     "llama-3.1-8b-instant": (0.05, 0.08),

@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models import Base
 from app.models.document import Document
 from app.models.group import Group
-from app.services import group_service
+from app.services import embedding_service, group_service
 from tests.helpers import make_user
 
 
@@ -24,7 +24,7 @@ def env(monkeypatch):
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     store = _RecordingStore()
-    monkeypatch.setattr(group_service, "get_vector_store", lambda: store)
+    monkeypatch.setattr(embedding_service, "get_vector_store", lambda: store)
     alice, bob = make_user(session), make_user(session)
     session.commit()
     yield session, alice.id, bob.id, store

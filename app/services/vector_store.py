@@ -158,12 +158,22 @@ def _make_client(url: str) -> QdrantClient:
 
 
 @lru_cache(maxsize=1)
-def get_vector_store() -> VectorStore:
-    embedder = get_embedder()
-    url = settings.vector_store_url
+def _client() -> QdrantClient:
+    return _make_client(settings.vector_store_url)
+
+
+@lru_cache(maxsize=64)
+def store_for(model_name: str, dimension: int) -> VectorStore:
+    """The vector store (one collection) for an embedding model; all share one client."""
     return VectorStore(
-        _make_client(url),
-        embedder.model_name,
-        embedder.dimension,
-        payload_indexes=url.startswith(("http://", "https://")),
+        _client(),
+        model_name,
+        dimension,
+        payload_indexes=settings.vector_store_url.startswith(("http://", "https://")),
     )
+
+
+def get_vector_store() -> VectorStore:
+    """The store for the server's own (local) embedding model."""
+    embedder = get_embedder()
+    return store_for(embedder.model_name, embedder.dimension)

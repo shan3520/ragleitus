@@ -427,3 +427,107 @@ def test_batch_status_counts_and_lists_the_users_documents(env):
 
     only_ready = ingestion.batch_status(session, user_id, [result["documents"][0]["id"]])
     assert (only_ready["status"], only_ready["queued"]) == ("idle", 0)
+
+
+# ---------------------------------------------------------------- embedding choice
+
+
+def _choose(session, user_id, provider, model=None):
+    from app.services import embedding_service
+    from tests.fakes import provider_embedder_factory
+
+    embedding_service.save_choice(session, user_id, provider, model, factory=provider_embedder_factory())
+    session.commit()
+
+
+def _index_with_choice(env, document_id, factory):
+    session_factory, _, _, _, store = env
+    ingestion.index_document(document_id, session_factory=session_factory, store=store, embedder_factory=factory)
+
+
+def test_a_document_is_embedded_with_its_owners_choice_and_records_it(env, vector_stores):
+    from app.models.telemetry_event import TelemetryEvent
+    from app.services import vector_store
+    from tests.fakes import provider_embedder_factory
+
+    _, session, user_id, _, local_store = env
+    _choose(session, user_id, "openai")
+    doc = ingestion.create_document(session, user_id, "notes.md", b"Ship on Friday.\n\nReview on Monday.")
+    session.commit()
+
+    factory = provider_embedder_factory()
+    _index_with_choice(env, doc.id, factory)
+    session.expire_all()
+    doc = session.get(Document, doc.id)
+
+    assert doc.status == "ready"
+    assert (doc.embedding_provider, doc.embedding_model, doc.embedding_dimension) == ("openai", "text-embedding-3-small", 64)
+    remote = vector_store.store_for("openai/text-embedding-3-small", 64)
+    assert remote.count(user_id, doc.id) == len(doc.chunks)
+    assert local_store.count(user_id, doc.id) == 0
+    # The provider calls are in telemetry (the settings check, then indexing).
+    assert session.query(TelemetryEvent).filter_by(operation="embedding").count() == 2
+
+
+def test_switching_models_moves_the_vectors_to_the_new_collection(env, vector_stores):
+    from app.services import vector_store
+    from tests.fakes import provider_embedder_factory
+
+    _, session, user_id, _, local_store = env
+    doc = ingestion.create_document(session, user_id, "notes.md", b"Ship on Friday.")
+    session.commit()
+    _index(env, doc.id)  # the local model
+    assert local_store.count(user_id, doc.id) == 1
+
+    _choose(session, user_id, "mistral")
+    ingestion.mark_for_reindex(session, user_id, doc.id)
+    session.commit()
+    _index_with_choice(env, doc.id, provider_embedder_factory())
+
+    remote = vector_store.store_for("mistral/mistral-embed", 64)
+    assert remote.count(user_id, doc.id) == 1
+    assert local_store.count(user_id, doc.id) == 0
+
+    # Deleting the document removes the vectors from the collection they are in.
+    assert ingestion.delete_document(session, user_id, doc.id, store=local_store)
+    session.commit()
+    assert remote.count(user_id, doc.id) == 0
+
+
+def test_an_unusable_embedding_choice_fails_with_a_readable_message(env, vector_stores):
+    from app.services.llm import ProviderError
+    from tests.fakes import provider_embedder_factory
+
+    _, session, user_id, _, local_store = env
+    _choose(session, user_id, "openai")
+    doc = ingestion.create_document(session, user_id, "notes.md", b"Ship on Friday.")
+    session.commit()
+
+    # The real factory: the user never stored an OpenAI key.
+    _index_with_choice(env, doc.id, None)
+    session.expire_all()
+    doc = session.get(Document, doc.id)
+    assert doc.status == "failed"
+    assert doc.error.startswith("No API key stored for OpenAI, which your embedding setting uses.")
+    assert "sk-" not in doc.error
+
+    ingestion.mark_for_reindex(session, user_id, doc.id)
+    session.commit()
+    _index_with_choice(env, doc.id, provider_embedder_factory(fail=ProviderError("OpenAI returned HTTP 429: slow down", 429)))
+    session.expire_all()
+    doc = session.get(Document, doc.id)
+    assert (doc.status, doc.error) == ("failed", "Embedding failed: OpenAI returned HTTP 429: slow down")
+    assert session.query(Chunk).filter_by(document_id=doc.id).count() == 0
+
+
+def test_mark_documents_for_reindex_only_touches_the_users_documents(env):
+    _, session, user_id, _, _ = env
+    mine = ingestion.create_document(session, user_id, "a.md", b"Alpha.")
+    other_user = make_user(session)
+    theirs = ingestion.create_document(session, other_user.id, "b.md", b"Beta.")
+    mine.status = theirs.status = "ready"
+    session.commit()
+
+    assert ingestion.reindexable_document_ids(session, user_id) == [mine.id]
+    assert ingestion.mark_documents_for_reindex(session, user_id, [mine.id, theirs.id]) == [mine.id]
+    assert (mine.status, theirs.status) == ("pending", "ready")

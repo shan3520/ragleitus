@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from app.services.embeddings import FakeEmbedder
 from app.services.llm import ChatMessage, ProviderError, StreamEvent, Usage
+from app.services.llm.embeddings import EmbeddingCall
 
 
 class FakeProvider:
@@ -48,3 +50,44 @@ class FakeFactory:
     def __call__(self, name: str, api_key: str, base_url: str | None = None):
         self.created.append((name, api_key, base_url))
         return self.provider
+
+
+class FakeProviderEmbedder(FakeEmbedder):
+    """Stands in for ProviderEmbedder: hashing vectors (a different size from
+    the local fake, so a different collection), a provider name, and the same
+    call log. With `fail`, every call raises it."""
+
+    def __init__(self, provider: str = "openai", model: str = "fake-embed", dimension: int = 64, fail: Exception | None = None):
+        super().__init__(dimension)
+        self.provider = provider
+        self.model = model
+        self.model_name = f"{provider}/{model}"
+        self.calls: list[EmbeddingCall] = []
+        self.fail = fail
+
+    def _note(self, texts: list[str]) -> None:
+        if self.fail is not None:
+            self.calls.append(EmbeddingCall(1.0, Usage(), "\n".join(texts), self.fail))
+            raise self.fail
+        self.calls.append(EmbeddingCall(1.0, Usage(prompt_tokens=3 * len(texts), completion_tokens=0), "\n".join(texts)))
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self._note(texts)
+        return super().embed_documents(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        self._note([text])
+        return super().embed_query(text)
+
+
+def provider_embedder_factory(**kwargs):
+    """An EmbedderFactory that builds FakeProviderEmbedders for the chosen provider and model."""
+    built: list[FakeProviderEmbedder] = []
+
+    def factory(session, user_id, choice):
+        embedder = FakeProviderEmbedder(choice.provider, choice.model, **kwargs)
+        built.append(embedder)
+        return embedder
+
+    factory.built = built
+    return factory

@@ -24,6 +24,14 @@ class Document(Base):
     # When the document was last queued or claimed for indexing; used to find
     # documents whose run was lost.
     index_updated_at = Column(DateTime(timezone=True), nullable=True)
+    # The embedding model the document's current vectors were made with, set
+    # when indexing finishes: "local" (or NULL, for documents indexed before
+    # this was recorded) means the server's own model; otherwise a provider
+    # name, its model and the vector size, which together name the vector
+    # collection (see embedding_service).
+    embedding_provider = Column(String(100), nullable=True)
+    embedding_model = Column(String(255), nullable=True)
+    embedding_dimension = Column(Integer, nullable=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=True)
     last_reviewed_at = Column(DateTime, nullable=True)

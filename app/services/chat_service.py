@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import AsyncIterator, Callable
 
@@ -77,6 +77,9 @@ class PreparedTurn:
     provider: ChatProvider
     prompt: list[ChatMessage]
     sources: list[RetrievedChunk]
+    # Retrieval problems the user should know about (documents searched by
+    # keyword only because their embedding provider could not be used).
+    warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------- conversations
@@ -232,7 +235,8 @@ def prepare_turn(
         raise ProviderChoiceError(f"No API key stored for provider '{provider_name}'.")
 
     history = answered_history(list(conversation.messages), settings.chat_history_turns)
-    sources = retriever(session, user_id, content, document_ids=document_ids)
+    warnings: list[str] = []
+    sources = retriever(session, user_id, content, document_ids=document_ids, warnings=warnings)
     prompt = build_prompt(history, content, sources)
 
     user_message = Message(conversation_id=conversation.id, role="user", content=content)
@@ -254,6 +258,7 @@ def prepare_turn(
         provider=chat_provider,
         prompt=prompt,
         sources=sources,
+        warnings=warnings,
     )
 
 

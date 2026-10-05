@@ -67,7 +67,7 @@ def test_choose_a_provider_then_reindex_the_documents_made_with_the_old_model(cl
     assert queued.json() == {"queued": 2, "document_ids": [first, second]}
 
     after = client.get("/api/settings/embeddings", headers=headers).json()
-    assert after["outdated"] == 0
+    assert after["outdated"] == 0 and after["indexing"] == 0
     assert after["documents"] == [{"provider": "openai", "model": "text-embedding-3-small", "documents": 2}]
     detail = client.get(f"/api/documents/{second}", headers=headers).json()
     assert detail["status"] == "ready"

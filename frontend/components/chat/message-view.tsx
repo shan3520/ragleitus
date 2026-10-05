@@ -18,6 +18,8 @@ export interface ChatItem {
   messageId?: number;
   citations?: Citation[] | null;
   sources?: Source[];
+  /** Retrieval problems, e.g. documents that could only be searched by keyword. */
+  warnings?: string[];
   /** The answer's latest saved evaluation, if it has one. */
   evaluation?: Evaluation;
   streaming?: boolean;
@@ -120,6 +122,12 @@ export function MessageView({ item }: { item: ChatItem }) {
       ) : (
         <MarkdownAnswer content={item.content} citations={citations} />
       )}
+      {item.warnings?.map((warning) => (
+        <p key={warning} className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          <span>{warning}</span>
+        </p>
+      ))}
       {item.streaming && item.content && <span className="inline-block h-4 w-1.5 animate-pulse bg-foreground/60" aria-hidden />}
       {item.error && (
         <p className={cn("flex items-center gap-1.5 text-sm text-destructive")} role="alert">

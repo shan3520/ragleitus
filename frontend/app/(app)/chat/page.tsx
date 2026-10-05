@@ -103,7 +103,7 @@ function ChatWorkspace() {
         id,
         { content, provider: provider || undefined, model: model || undefined },
         {
-          onSources: (sources) => updateLast((it) => ({ ...it, sources })),
+          onSources: (sources, warnings) => updateLast((it) => ({ ...it, sources, warnings })),
           onToken: (text) => updateLast((it) => ({ ...it, content: it.content + text })),
           onCitations: (citations) => updateLast((it) => ({ ...it, citations })),
           onDone: (done) =>

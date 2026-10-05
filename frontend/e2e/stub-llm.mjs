@@ -2,9 +2,11 @@
 //
 // Chat answers quote the first retrieved passage and cite it as [1]; judge
 // prompts get fixed JSON scores. Responses stream as SSE like OpenAI's.
+// /embeddings returns word-hashing vectors, so texts that share words are close.
 // Accepts only the key "stub-key".
 //
 //   node e2e/stub-llm.mjs            # listens on :9999 (STUB_LLM_PORT to change)
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
 const PORT = Number(process.env.STUB_LLM_PORT ?? 9999);
@@ -30,15 +32,39 @@ function answerFor(messages) {
   return passage ? `According to the documents: ${passage[1].trim()} [1]` : "I could not find this in the documents.";
 }
 
+const DIMENSION = 256;
+
+function embed(text) {
+  const vector = new Array(DIMENSION).fill(0);
+  for (const word of String(text).toLowerCase().match(/\w+/g) ?? []) {
+    const digest = createHash("md5").update(word).digest();
+    vector[digest.readUInt32LE(0) % DIMENSION] += digest[4] % 2 === 0 ? 1 : -1;
+  }
+  const norm = Math.sqrt(vector.reduce((n, v) => n + v * v, 0)) || 1;
+  return vector.map((v) => v / norm);
+}
+
+async function readJson(req) {
+  let raw = "";
+  for await (const chunk of req) raw += chunk;
+  return JSON.parse(raw);
+}
+
 const server = createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/health") return json(res, 200, { ok: true });
   if (req.headers.authorization !== `Bearer ${KEY}`) return json(res, 401, { error: { message: "Invalid API key" } });
   if (req.method === "GET" && req.url?.endsWith("/models")) return json(res, 200, { data: [{ id: "stub-model" }] });
+  if (req.method === "POST" && req.url?.endsWith("/embeddings")) {
+    const { input } = await readJson(req);
+    const texts = Array.isArray(input) ? input : [input];
+    return json(res, 200, {
+      data: texts.map((text, index) => ({ index, embedding: embed(text) })),
+      usage: { prompt_tokens: texts.join(" ").split(/\s+/).length },
+    });
+  }
   if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) return json(res, 404, { error: { message: "Not found" } });
 
-  let raw = "";
-  for await (const chunk of req) raw += chunk;
-  const { messages } = JSON.parse(raw);
+  const { messages } = await readJson(req);
   const answer = answerFor(messages);
   const words = answer.split(" ");
 

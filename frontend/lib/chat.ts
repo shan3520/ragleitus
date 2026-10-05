@@ -10,7 +10,8 @@ export interface SendMessageBody {
 }
 
 export interface TurnHandlers {
-  onSources?: (sources: Source[]) => void;
+  /** `warnings`: e.g. documents that could only be searched by keyword. */
+  onSources?: (sources: Source[], warnings: string[]) => void;
   onToken?: (text: string) => void;
   onCitations?: (citations: Citation[]) => void;
   onDone?: (done: TurnDone) => void;
@@ -59,7 +60,7 @@ export async function streamMessage(
     const data = JSON.parse(event.data);
     switch (event.event) {
       case "sources":
-        handlers.onSources?.(data.sources);
+        handlers.onSources?.(data.sources, data.warnings ?? []);
         break;
       case "token":
         handlers.onToken?.(data.text);

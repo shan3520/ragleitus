@@ -61,7 +61,35 @@ export interface DocumentDetail {
   filename: string | null;
   group_id: number | null;
   created_at: string | null;
+  /** The model the document's vectors were made with; null before it is first indexed. */
+  embedding: EmbeddingRef | null;
   chunks: DocumentChunk[];
+}
+
+export interface EmbeddingRef {
+  /** "local" (the server's own model) or a provider name. */
+  provider: string;
+  model: string;
+}
+
+export interface EmbeddingOption {
+  provider: string;
+  label: string;
+  /** "" when the user has to name the model (self-hosted servers). */
+  default_model: string;
+  has_key: boolean;
+}
+
+export interface EmbeddingSettings extends EmbeddingRef {
+  /** The chosen provider's key has been deleted since. */
+  key_missing: boolean;
+  options: EmbeddingOption[];
+  /** Ready documents per embedding model. */
+  documents: (EmbeddingRef & { documents: number })[];
+  /** Documents not yet embedded with the current choice. */
+  outdated: number;
+  /** Documents queued or being indexed right now. */
+  indexing: number;
 }
 
 export interface DocumentAccepted {
@@ -336,6 +364,15 @@ export const api = {
   },
   reindexDocument: (id: number) => request<DocumentAccepted>(`/api/documents/${id}/reindex`, { method: "POST" }),
   deleteDocument: (id: number) => request<void>(`/api/documents/${id}`, { method: "DELETE" }),
+
+  embeddingSettings: () => request<EmbeddingSettings>("/api/settings/embeddings"),
+  saveEmbeddingSettings: (body: { provider: string; model?: string }) =>
+    request<EmbeddingSettings>("/api/settings/embeddings", { method: "PUT", body: json(body) }),
+  reindexForEmbeddings: (scope: "outdated" | "all" = "outdated") =>
+    request<{ queued: number; document_ids: number[] }>("/api/settings/embeddings/reindex", {
+      method: "POST",
+      body: json({ scope }),
+    }),
 
   conversations: () => request<Conversation[]>("/api/conversations"),
   conversation: (id: number) => request<ConversationDetail>(`/api/conversations/${id}`),

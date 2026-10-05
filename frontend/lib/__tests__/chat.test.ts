@@ -36,6 +36,16 @@ it("dispatches sources, tokens, citations and done in order", async () => {
   expect(JSON.parse(init!.body as string)).toEqual({ content: "What is E-4711?", stream: true });
 });
 
+it("passes on retrieval warnings with the sources, and none when there are none", async () => {
+  const body =
+    'event: sources\ndata: {"sources":[],"warnings":["1 document embedded with openai/x could only be searched by keyword: no key"]}\n\n' +
+    'event: sources\ndata: {"sources":[]}\n\n';
+  jest.spyOn(global, "fetch").mockResolvedValue(sseResponse(body));
+  const seen: string[][] = [];
+  await streamMessage(1, { content: "Q" }, { onSources: (_, warnings) => seen.push(warnings) });
+  expect(seen).toEqual([["1 document embedded with openai/x could only be searched by keyword: no key"], []]);
+});
+
 it("throws the server's refusal before streaming starts", async () => {
   jest.spyOn(global, "fetch").mockResolvedValue(
     new Response(JSON.stringify({ detail: "No API key stored for provider 'anthropic'." }), { status: 400 }),

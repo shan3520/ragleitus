@@ -233,6 +233,9 @@ def describe(session: Session, user_id: int) -> dict:
         "options": options(session, user_id),
         "documents": document_counts(session, user_id),
         "outdated": len(outdated_document_ids(session, user_id)),
+        "indexing": session.query(func.count(Document.id))
+        .filter(Document.user_id == user_id, Document.status.in_(("pending", "indexing")))
+        .scalar(),
     }
 
 

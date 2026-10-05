@@ -15,7 +15,7 @@ the **API** (FastAPI, with Swagger UI) and the **web app** (Next.js, in
 |---|---|
 | Accounts | Register and log in (argon2 password hashing, JWT). Every document, key, conversation and metric is private to its owner. |
 | Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, NVIDIA NIM, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
-| Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Re-index or delete at any time. |
+| Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Embeddings come from a local model, or from a provider with your own key. Re-index or delete at any time. |
 | Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day. |
 | Evaluation | LLM-as-a-judge scoring of any answer: faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
@@ -36,8 +36,8 @@ This starts PostgreSQL 16, Qdrant, Redis, the API, an indexing worker and the
 web app. Migrations run automatically. Open <http://localhost:3000>, create an account, add a provider
 key and upload a document. The interactive API is at <http://localhost:8000/docs>.
 
-The first document you upload triggers a one-time download of the embedding
-model (`BAAI/bge-small-en-v1.5`, about 70 MB, from Hugging Face). It is cached in
+Unless you choose a provider for embeddings in Settings, the first document you
+upload triggers a one-time download of the local embedding model (`BAAI/bge-small-en-v1.5`, about 70 MB, from Hugging Face). It is cached in
 the `model-cache` volume.
 
 ## Quick start without Docker
@@ -125,7 +125,7 @@ flowchart LR
     api --> services[Services<br/>app/services]
     services --> pg[(PostgreSQL<br/>users, documents, chunks,<br/>conversations, telemetry,<br/>evaluations)]
     services --> qdrant[(Qdrant<br/>chunk vectors)]
-    services --> embed[fastembed<br/>local ONNX model]
+    services --> embed[Embeddings<br/>local fastembed model,<br/>or a provider with the user's key]
     services --> llm[LLM providers<br/>user's own keys]
 
     subgraph Ingestion
@@ -145,7 +145,26 @@ flowchart LR
   (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 - **Where data lives.** Vectors live only in Qdrant, and each point carries only
   ids. Chunk text lives in the SQL `chunks` table. Every vector query is filtered
-  by the owner's `user_id`.
+  by the owner's `user_id`. Each embedding model has its own collection, named
+  after the model and its vector size.
+- **Embeddings.** By default documents are embedded by a local model
+  (fastembed, no key needed). In Settings → Embeddings a user can switch to one
+  of their provider keys: OpenAI (`text-embedding-3-small`), Google Gemini
+  (`gemini-embedding-001`), Mistral (`mistral-embed`), Together AI, NVIDIA NIM,
+  or a self-hosted OpenAI-compatible server such as Ollama (any model it
+  serves). Anthropic, Groq and OpenRouter offer no embeddings API.
+  - A choice is checked with one embedding call before it is saved.
+  - It applies to documents indexed from then on. Each document records the
+    model its vectors were made with, and a question is embedded once per model
+    in use, so documents made with different models are searched side by side.
+    Settings shows how many documents use another model and re-indexes them on
+    request.
+  - If a provider can't be used when a question is asked (its key was deleted,
+    the provider is down), those documents are still searched by keyword, and
+    the answer says so. Indexing with an unusable choice fails with a message
+    saying what to fix.
+  - Embedding calls are recorded in telemetry (operation `embedding`) with
+    their token counts and cost.
 - **Indexing.** Upload extracts and cleans the text right away, so a bad file
   fails immediately. Chunking and embedding then run as a job that records
   `pending → indexing → ready | failed`. The cleaned pages are kept, so
@@ -254,6 +273,7 @@ counted as `unpriced_requests` in the telemetry summary.
 | `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `PATCH /auth/me/password` | Accounts |
 | `GET /api/providers`, `POST/GET/DELETE /api/provider-keys`, `POST /api/provider-keys/{provider}/validate` | Providers and keys |
 | `POST /api/documents`, `GET /api/documents[/{id}]`, `POST /api/documents/{id}/reindex`, `DELETE /api/documents/{id}` | Documents |
+| `GET/PUT /api/settings/embeddings`, `POST /api/settings/embeddings/reindex` | Embedding model |
 | `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`, `POST /api/conversations/{id}/messages` | Chat |
 | `GET /api/telemetry/summary`, `GET /api/telemetry/events` | Telemetry |
 | `POST /api/evaluations`, `GET /api/evaluations` | Evaluation |
@@ -332,9 +352,6 @@ container reach the stub on the host:
   Telemetry is stored in PostgreSQL and served by the API.
 - **Evaluation frameworks.** No Ragas or DeepEval. Evaluation uses its own LLM
   judge with the same metric names.
-- **Embeddings through a provider key.** Embeddings come from the local model for
-  every user. Per-user embedding providers would need each document to record its
-  embedding model.
 - **LangGraph.** The RAG flow is plain service code; it does not need an agent
   graph yet.
 

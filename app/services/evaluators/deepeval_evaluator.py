@@ -30,9 +30,11 @@ DESCRIPTION = (
 )
 NO_PASSAGES = "(No passages were retrieved.)"
 
-# Before DeepEval is imported: no telemetry, no update checks.
-os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "YES")
-os.environ.setdefault("DEEPEVAL_UPDATE_WARNING_OPT_IN", "NO")
+# Before DeepEval is imported: no telemetry, no update checks, and no reading
+# of .env files from the working directory (where this app keeps its secrets).
+os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "1")
+os.environ.setdefault("DEEPEVAL_UPDATE_WARNING_OPT_IN", "0")
+os.environ.setdefault("DEEPEVAL_DISABLE_DOTENV", "1")
 
 
 def installed() -> bool:

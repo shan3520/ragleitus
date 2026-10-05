@@ -34,7 +34,9 @@ def test_deepeval_without_a_reference_scores_context_relevancy_and_no_recall():
     assert scores.context_recall is None and scores.context_precision == 1.0
 
 
-def test_deepeval_telemetry_is_off():
-    import os
+def test_deepeval_sends_nothing_and_reads_no_env_files():
+    from deepeval.config.settings import get_settings
+    from deepeval.telemetry.client import telemetry_opt_out
 
-    assert os.environ["DEEPEVAL_TELEMETRY_OPT_OUT"] == "YES"
+    assert telemetry_opt_out() is True
+    assert get_settings().DEEPEVAL_DISABLE_DOTENV is True

@@ -124,7 +124,7 @@ def test_create_run_compare_and_export_an_experiment():
 
     report = client.get("/api/experiments/report", headers=headers).json()
     assert report["experiments_evaluated"] == 1
-    assert report["best_performing"]["experiment"] == "Built-in vs brief"
+    assert report["best_performing"] is None  # the fake judge scores both variants alike
     assert [e["name"] for e in client.get("/api/experiments", headers=headers).json()] == ["Built-in vs brief"]
 
     # Run again: the results are replaced, not added to.

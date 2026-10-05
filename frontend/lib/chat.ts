@@ -7,6 +7,8 @@ export interface SendMessageBody {
   provider?: string;
   model?: string;
   document_ids?: number[];
+  /** A prompt-library version to answer with; null for the built-in prompt. */
+  prompt_version_id?: number | null;
 }
 
 export interface TurnHandlers {

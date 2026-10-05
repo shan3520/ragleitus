@@ -18,6 +18,7 @@ the **API** (FastAPI, with Swagger UI) and the **web app** (Next.js, in
 | Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Embeddings come from a local model, or from a provider with your own key. Re-index or delete at any time. |
 | Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day. |
+| Prompts and experiments | A versioned prompt library you can chat with, and experiments that answer the same questions with several prompts, models and retrieval strategies and compare their quality, latency and cost (run as a LangGraph pipeline), with CSV/JSON export. |
 | Evaluation | LLM-as-a-judge scoring of any answer: faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
 
 ## Quick start with Docker Compose
@@ -215,6 +216,32 @@ flowchart LR
   its own origin: a route handler forwards `/backend/*` to `API_URL` at runtime
   (streaming, so chat tokens arrive as they are generated). No CORS setup is
   needed, and one build works against any API address.
+- **Prompt library.** A user's own system prompts, versioned: saving changes
+  adds a version and earlier ones stay as they were; prompts can be cloned. A
+  template must contain `{context}` (the numbered passages) and may contain
+  `{question}`. Chat can answer with any version (the prompt picker, or
+  `prompt_version_id` on a message); the choice is kept for the conversation.
+- **Experiments.** Questions (optionally with reference answers) and up to six
+  variants, each a prompt, a provider and model, a retrieval strategy
+  (`hybrid`, `dense` or `keyword`) and a number of passages.
+  - A run answers every question with every variant through a LangGraph
+    `StateGraph`: retrieve → assemble prompt → generate → evaluate → record
+    (`app/services/experiment_runner.py`). It runs on the Celery worker (or in
+    the API process with `TASK_QUEUE=inline`), on the user's own keys, and every
+    call is recorded in telemetry.
+  - Each result stores the answer, citations, the passages used, latency,
+    tokens and cost, the LLM judge's scores (judged by each variant's own model
+    unless a judge is chosen) and ROUGE-L against the reference answer.
+  - A failed call is recorded with its error and the run goes on. Running again
+    replaces the results; a run lost with its worker can be restarted once it
+    is older than `INDEX_STALE_MINUTES`.
+  - The comparison averages each metric per variant and marks the variant that
+    is strictly best at it (ties name none). `/export` gives every result as
+    CSV (cells that a spreadsheet would run as formulas are escaped) or JSON;
+    `/api/experiments/report` lists every experiment with its best variants.
+  - The RAG flow in chat stays plain service code; LangGraph runs the
+    experiment pipeline, where its graph of steps and conditional skips (a
+    failed generation goes straight to recording) earns its place.
 - **Provider adapters.** These live in `app/services/llm`: one adapter for the
   OpenAI-compatible family, one for Gemini, and one using the official
   `anthropic` SDK. All stream text and report token usage the same way.
@@ -274,6 +301,8 @@ counted as `unpriced_requests` in the telemetry summary.
 | `GET /api/providers`, `POST/GET/DELETE /api/provider-keys`, `POST /api/provider-keys/{provider}/validate` | Providers and keys |
 | `POST /api/documents`, `GET /api/documents[/{id}]`, `POST /api/documents/{id}/reindex`, `DELETE /api/documents/{id}` | Documents |
 | `GET/PUT /api/settings/embeddings`, `POST /api/settings/embeddings/reindex` | Embedding model |
+| `POST/GET /api/prompts`, `GET/PATCH/DELETE /api/prompts/{id}`, `POST /api/prompts/{id}/versions`, `POST /api/prompts/{id}/clone`, `GET /api/prompts/default` | Prompt library |
+| `POST/GET /api/experiments`, `GET/DELETE /api/experiments/{id}`, `POST /api/experiments/{id}/run`, `GET /api/experiments/{id}/compare`, `GET /api/experiments/{id}/export?format=csv\|json`, `GET /api/experiments/report` | Experiments |
 | `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`, `POST /api/conversations/{id}/messages` | Chat |
 | `GET /api/telemetry/summary`, `GET /api/telemetry/events` | Telemetry |
 | `POST /api/evaluations`, `GET /api/evaluations` | Evaluation |
@@ -345,18 +374,12 @@ container reach the stub on the host:
 
 `docs/SPEC.md` describes more than this. Still to build:
 
-- **Prompt library and experiments.** Saving and versioning prompts, and
-  comparing prompts, models or retrieval strategies side by side, in the API and
-  as pages in the web app.
 - **Observability stack.** No Langfuse, OpenTelemetry, Prometheus or Grafana.
   Telemetry is stored in PostgreSQL and served by the API.
 - **Evaluation frameworks.** No Ragas or DeepEval. Evaluation uses its own LLM
   judge with the same metric names.
-- **LangGraph.** The RAG flow is plain service code; it does not need an agent
-  graph yet.
 
-Some older endpoints still return placeholder data: `/api/export/metrics` and
-`/api/experiments/report`.
+One older endpoint still returns placeholder data: `/api/export/metrics`.
 
 ## License
 

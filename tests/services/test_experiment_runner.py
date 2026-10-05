@@ -134,11 +134,29 @@ def test_compare_export_and_report(env):
     _, data = experiment_service.export_json(session, user.id, experiment.id)
     assert len(data["results"]) == 4 and data["experiment"]["name"] == "Prompts vs retrieval"
 
+    # The fake judge scores every answer alike: no variant is ahead.
+    assert "faithfulness" not in comparison["best"] and "quality" not in comparison["best"]
     report = experiment_service.report(session, user.id)
     assert report["experiments_evaluated"] == 1
-    assert report["best_performing"]["experiment"] == "Prompts vs retrieval"
+    assert report["best_performing"] is None
     assert report["experiments"][0]["status"] == "completed"
     assert experiment_service.report(session, make_user(session).id)["experiments"] == []
+
+
+def test_the_best_variant_is_the_one_strictly_ahead(env):
+    session, user, run = env
+    experiment = _create(session, user)
+    run(experiment.id)
+    built_in_id, brief_id = [v.id for v in experiment.variants]
+    # The library-prompt variant's answers were judged less faithful.
+    session.query(ExperimentResult).filter(ExperimentResult.variant_id == brief_id).update({ExperimentResult.faithfulness: 0.4})
+    session.commit()
+
+    comparison = experiment_service.compare(session, user.id, experiment.id)
+    assert comparison["best"]["faithfulness"] == built_in_id
+    assert comparison["best"]["quality"] == built_in_id
+    assert "answer_relevancy" not in comparison["best"]  # a tie
+    assert experiment_service.report(session, user.id)["best_performing"]["variant"] == "Built-in"
 
 
 def test_exported_cells_cannot_run_as_spreadsheet_formulas(env):

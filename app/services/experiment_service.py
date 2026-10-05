@@ -373,11 +373,17 @@ def compare(session: Session, user_id: int, experiment_id: int) -> dict:
             }
         )
 
+    # A variant is best at a metric only if it is strictly ahead of every
+    # other; a tie for first names none.
     best = {}
     for metric, higher in METRICS.items():
-        scored = [(v["averages"][metric], v["id"]) for v in variants if v["averages"][metric] is not None]
-        if len(scored) > 1:
-            best[metric] = (max if higher else min)(scored)[1]
+        scored = sorted(
+            ((v["averages"][metric], v["id"]) for v in variants if v["averages"][metric] is not None),
+            key=lambda item: item[0],
+            reverse=higher,
+        )
+        if len(scored) > 1 and scored[0][0] != scored[1][0]:
+            best[metric] = scored[0][1]
 
     cases = []
     for index, case in enumerate(experiment.cases or []):
@@ -461,8 +467,8 @@ def export_json(session: Session, user_id: int, experiment_id: int) -> tuple[Exp
 
 
 def report(session: Session, user_id: int) -> dict:
-    """Every experiment with its best variant per metric; and, of the most
-    recently finished experiment, the variant with the best answer quality."""
+    """Every experiment with its best variant per metric; and the variant with
+    the best answer quality in the most recent experiment that has a clear one."""
     entries = []
     best_performing = None
     for data in describe_all(session, user_id):
@@ -471,11 +477,15 @@ def report(session: Session, user_id: int) -> dict:
             comparison = compare(session, user_id, data["id"])
             labels = {v["id"]: v["label"] for v in comparison["variants"]}
             best = {metric: labels[variant_id] for metric, variant_id in comparison["best"].items()}
-            if best_performing is None:
-                quality = [(v["averages"]["quality"], v["label"]) for v in comparison["variants"] if v["averages"]["quality"] is not None]
-                if quality:
-                    score, label = max(quality)
-                    best_performing = {"experiment_id": data["id"], "experiment": data["name"], "variant": label, "quality": score}
+            winner = comparison["best"].get("quality")
+            if best_performing is None and winner is not None:
+                variant = next(v for v in comparison["variants"] if v["id"] == winner)
+                best_performing = {
+                    "experiment_id": data["id"],
+                    "experiment": data["name"],
+                    "variant": variant["label"],
+                    "quality": variant["averages"]["quality"],
+                }
         entries.append({**data, "best": best})
     return {
         "experiments_evaluated": sum(1 for e in entries if e["status"] == "completed"),

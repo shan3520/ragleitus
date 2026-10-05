@@ -26,12 +26,15 @@ function ChatWorkspace() {
 
   const conversations = useApi(api.conversations);
   const providers = useApi(api.providers);
+  const prompts = useApi(api.prompts);
   const configured = (providers.data ?? []).filter((p) => p.configured);
 
   const [items, setItems] = useState<ChatItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
+  // A prompt-library version id, or "" for the built-in prompt. "Use in chat" links pass ?prompt=.
+  const [promptVersion, setPromptVersion] = useState(() => searchParams.get("prompt") ?? "");
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const abort = useRef<AbortController | null>(null);
@@ -58,6 +61,7 @@ function ChatWorkspace() {
         setItems(toChatItems(c.messages, evaluations?.items));
         setProvider(c.provider ?? "");
         setModel(c.model ?? "");
+        setPromptVersion(c.prompt_version_id ? String(c.prompt_version_id) : "");
       })
       .catch((err) => !cancelled && setLoadError(err instanceof Error ? err.message : String(err)));
     return () => {
@@ -101,7 +105,12 @@ function ChatWorkspace() {
       }
       await streamMessage(
         id,
-        { content, provider: provider || undefined, model: model || undefined },
+        {
+          content,
+          provider: provider || undefined,
+          model: model || undefined,
+          prompt_version_id: promptVersion ? Number(promptVersion) : null,
+        },
         {
           onSources: (sources, warnings) => updateLast((it) => ({ ...it, sources, warnings })),
           onToken: (text) => updateLast((it) => ({ ...it, content: it.content + text })),
@@ -225,6 +234,28 @@ function ChatWorkspace() {
             onChange={(e) => setModel(e.target.value)}
             disabled={streaming}
           />
+          <label className="sr-only" htmlFor="chat-prompt">
+            Prompt
+          </label>
+          <Select
+            id="chat-prompt"
+            className="h-8 w-auto min-w-40"
+            value={promptVersion}
+            onChange={(e) => setPromptVersion(e.target.value)}
+            disabled={streaming}
+          >
+            <option value="">Built-in prompt</option>
+            {(prompts.data ?? []).map((p) =>
+              p.latest_version ? (
+                <option key={p.id} value={String(p.latest_version.id)}>
+                  {p.name} v{p.latest_version.version}
+                </option>
+              ) : null,
+            )}
+            {promptVersion && prompts.data && !prompts.data.some((p) => String(p.latest_version?.id) === promptVersion) && (
+              <option value={promptVersion}>An earlier prompt version</option>
+            )}
+          </Select>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">

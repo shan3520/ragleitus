@@ -44,10 +44,11 @@ def _document(session, user, title, *passages, status="ready"):
     return doc, [c.id for c in chunks]
 
 
-def test_query_terms_drop_stop_words_and_duplicates():
-    assert keyword_search.query_terms("What does the error E-4711 mean? The error!") == ["error", "e", "4711", "mean"]
-    assert keyword_search.query_terms("what is it") == ["what", "is", "it"]
-    assert len(keyword_search.query_terms(" ".join(f"word{i}" for i in range(100)))) == keyword_search.MAX_TERMS
+def test_content_terms_drop_stop_words_and_duplicates():
+    terms = ["what", "does", "the", "error", "e-4711", "e", "4711", "mean", "the", "error"]
+    assert keyword_search.content_terms(terms) == ["error", "e-4711", "e", "4711", "mean"]
+    assert keyword_search.content_terms(["what", "is", "it"]) == ["what", "is", "it"]
+    assert len(keyword_search.content_terms([f"word{i}" for i in range(100)])) == keyword_search.MAX_TERMS
 
 
 def test_ranks_the_passage_with_the_rare_term_first(session):
@@ -91,6 +92,44 @@ def test_no_terms_or_no_match_returns_nothing(session):
     assert keyword_search.search(session, user.id, "submarines", limit=5) == []
     assert keyword_search.search(session, user.id, "rockets", limit=0) == []
     assert keyword_search.search(session, make_user(session).id, "rockets", limit=5) == []
+
+
+def test_versions_addresses_and_decimals_match(session):
+    user = make_user(session)
+    _, (version, contact, price, other) = _document(
+        session,
+        user,
+        "notes",
+        "Upgrade the gateway to version 3.2.1 before May.",
+        "Write to ops@example.com for access.",
+        "The licence costs 99.95 euros a seat.",
+        "Version 4 of the handbook is out.",
+    )
+
+    assert keyword_search.search(session, user.id, "which version is 3.2.1?", limit=5)[0] == version
+    assert keyword_search.search(session, user.id, "ops@example.com", limit=5)[0] == contact
+    assert keyword_search.search(session, user.id, "99.95", limit=5) == [price]
+
+
+def test_a_bare_number_finds_the_code_it_is_part_of(session):
+    user = make_user(session)
+    _, (code, other) = _document(
+        session, user, "errors", "Error E-4711 means the certificate expired.", "Room 12 is closed."
+    )
+
+    assert keyword_search.search(session, user.id, "4711", limit=5) == [code]
+    assert keyword_search.search(session, user.id, "E-4711", limit=5) == [code]
+
+
+@needs_postgres
+def test_postgres_parses_the_query_like_the_chunks():
+    engine = fresh_postgres()
+    with sessionmaker(bind=engine)() as session:
+        lexemes = keyword_search.query_lexemes(session, "Is 3.2.1 at ops@example.com E-4711?")
+    engine.dispose()
+    assert lexemes[:3] == ["is", "3.2.1", "at"]
+    # The parser reads E-4711 as a word and a signed number, in chunks too.
+    assert {"ops@example.com", "e", "-4711"} <= set(lexemes)
 
 
 def test_query_text_is_bound_never_inlined(session):

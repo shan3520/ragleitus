@@ -136,3 +136,15 @@ def test_reads_only_the_chunks_it_returns_on_postgres(env):
     assert results[0].document_title == "errors"
     reads_text = [s for s in statements if "chunks.content" in s]
     assert reads_text and all("chunks.id IN" in s for s in reads_text), reads_text
+
+
+def test_does_not_embed_the_query_without_ready_documents(env):
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+
+    class Unavailable:
+        def embed_query(self, text):
+            raise AssertionError("embedded a query with nothing to search")
+
+    assert retrieve(session, user.id, "anything", embedder=Unavailable(), store=search.store) == []

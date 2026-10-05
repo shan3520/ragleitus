@@ -9,9 +9,10 @@ Only chunks of the user's own documents with status "ready" are returned.
 Vector hits are resolved against the database, so a chunk deleted or
 rebuilt since it was indexed is never returned.
 
-Keyword search runs in the database where it can (see keyword_search), and
-only the rows of the chunks that are returned are loaded, so the cost of a
-query does not grow with the size of the user's collection.
+On PostgreSQL keyword search runs in the database (see keyword_search), and
+only the rows of candidate chunks are loaded, so the cost of a question does
+not grow with the size of the user's collection. SQLite scores keywords in
+memory.
 """
 
 from __future__ import annotations
@@ -59,6 +60,14 @@ def retrieve(
     embedder = embedder or get_embedder()
     store = store or get_vector_store()
     candidates = k * CANDIDATE_MULTIPLIER
+
+    # Without a ready document there is nothing to find; don't embed the query
+    # or call the vector store (chat still works without documents).
+    has_documents = session.query(Document.id).filter(Document.user_id == user_id, Document.status == "ready")
+    if document_ids:
+        has_documents = has_documents.filter(Document.id.in_(document_ids))
+    if has_documents.first() is None:
+        return []
 
     dense_hits = store.search(user_id, embedder.embed_query(query), limit=candidates, document_ids=document_ids)
     keyword_ranking = keyword_search.search(session, user_id, query, candidates, document_ids)

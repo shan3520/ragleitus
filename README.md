@@ -176,12 +176,19 @@ flowchart LR
   exact names, codes and numbers that embeddings blur.
   - On PostgreSQL, keyword search runs in the database: each chunk has a
     generated `tsvector` column with a GIN index (migration 0025), so a question
-    reads only the chunks that contain its terms. Matches are ranked like BM25:
-    any term matches, rare terms weigh more than common ones (inverse document
-    frequency over your ready chunks), and `ts_rank` with length
-    normalisation scores how often a term appears. Common English words are
-    left out of the query. The `simple` text search configuration lowercases
-    without stemming, so it works the same in every language.
+    reads only the chunks that contain its terms. The question is parsed by
+    the same PostgreSQL parser as the chunks, so versions (`3.2.1`), decimals,
+    e-mail addresses, URLs and codes like `E-4711` match as written. Matches
+    are ranked like BM25: any term matches, rare terms weigh more than common
+    ones, and `ts_rank` with length normalisation scores how often a term
+    appears. Common English words are left out of the query. The `simple`
+    text search configuration lowercases without stemming, so it works the
+    same in every language.
+  - How rare a term is comes from the statistics PostgreSQL keeps on the
+    column (`pg_stats`, refreshed by autovacuum), so weighting costs no extra
+    query. These cover all users' chunks, as search engines do: the weights
+    reflect how common a word is overall, never anyone's text, and results
+    only ever include your own chunks.
   - On SQLite (local development and the tests) your chunks are scored with
     BM25 in memory, which is fine up to tens of thousands of chunks.
   - Only the passages that are returned are loaded from the database.

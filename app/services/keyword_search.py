@@ -70,11 +70,27 @@ STATS_TTL_SECONDS = 300
 search_vector = literal_column("chunks.search_vector")
 
 
-def query_terms(query: str) -> list[str]:
-    """Distinct lowercase terms of the query, stop words removed unless that leaves none."""
-    terms = list(dict.fromkeys(tokenize(query)))
+def content_terms(terms: list[str]) -> list[str]:
+    """The distinct terms in order, stop words removed unless that leaves none."""
+    terms = list(dict.fromkeys(terms))
     content = [t for t in terms if t not in STOP_WORDS]
     return (content or terms)[:MAX_TERMS]
+
+
+def query_lexemes(session: Session, query: str) -> list[str]:
+    """The query's terms as PostgreSQL parses them, in order of appearance.
+
+    Chunks are parsed by PostgreSQL's text search parser, which keeps versions
+    (3.2.1), decimals, e-mail addresses, URLs and hyphenated codes (and their
+    parts) as lexemes of their own; parsing the query the same way is what
+    makes them match.
+    """
+    return list(
+        session.execute(
+            text("SELECT lexeme FROM unnest(to_tsvector(CAST(:config AS regconfig), :query)) ORDER BY positions[1]"),
+            {"config": TS_CONFIG, "query": query},
+        ).scalars()
+    )
 
 
 def _candidate_filter(user_id: int, document_ids: list[int] | None):
@@ -170,7 +186,9 @@ def ranking_statement(user_id: int, terms: list[str], weights: list[float], limi
     """The top chunks matching any term, ranked by IDF-weighted ts_rank.
 
     Each term is a bound parameter parsed by plainto_tsquery, so nothing in the
-    query is ever interpreted as tsquery syntax or SQL.
+    query is ever interpreted as tsquery syntax or SQL. Re-parsing a lexeme
+    gives the lexeme back (a compound one also gives its parts, which a chunk
+    containing it has too).
     """
     queries = [
         func.plainto_tsquery(literal_column(f"'{TS_CONFIG}'"), bindparam(f"term_{i}", term))
@@ -204,7 +222,13 @@ def weighted_terms(terms: list[str], stats: TermStatistics | None) -> list[tuple
 
 
 def _search_postgres(session, user_id, query, limit, document_ids) -> list[int]:
-    terms = weighted_terms(query_terms(query), term_statistics(session))
+    lexemes = query_lexemes(session, query)
+    # The parser reads the number in a code like E-4711 or ISO-9001 as a signed
+    # integer (-4711), so a search for the bare number also tries that form.
+    terms = content_terms(lexemes + [f"-{lexeme}" for lexeme in lexemes if lexeme.isdigit()])
+    if not terms:
+        return []
+    terms = weighted_terms(terms, term_statistics(session))
     statement = ranking_statement(
         user_id, [term for term, _ in terms], [weight for _, weight in terms], limit, document_ids
     )

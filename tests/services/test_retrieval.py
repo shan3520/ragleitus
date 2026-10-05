@@ -1,6 +1,6 @@
 import pytest
 from qdrant_client import QdrantClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.models import Base
@@ -8,14 +8,18 @@ from app.models.document import Document
 from app.services import ingestion
 from app.services.embeddings import FakeEmbedder
 from app.services.retrieval import retrieve
-from app.services.vector_store import VectorStore
+from app.services.vector_store import ChunkVector, VectorStore
 from tests.helpers import make_user
+from tests.postgres import fresh_postgres, needs_postgres
 
 
-@pytest.fixture
-def env(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'retrieval.db'}")
-    Base.metadata.create_all(engine)
+@pytest.fixture(params=["sqlite", pytest.param("postgresql", marks=needs_postgres)])
+def env(request, tmp_path):
+    if request.param == "sqlite":
+        engine = create_engine(f"sqlite:///{tmp_path / 'retrieval.db'}")
+        Base.metadata.create_all(engine)
+    else:
+        engine = fresh_postgres()
     factory = sessionmaker(bind=engine)
     embedder = FakeEmbedder()
     store = VectorStore(QdrantClient(location=":memory:"), embedder.model_name, embedder.dimension)
@@ -31,8 +35,11 @@ def env(tmp_path):
     def search(user_id, query, **kwargs):
         return retrieve(session, user_id, query, embedder=embedder, store=store, **kwargs)
 
+    search.store, search.embedder = store, embedder
+
     yield session, add, search
     session.close()
+    engine.dispose()
 
 
 def test_finds_the_relevant_passage_and_its_source(env):
@@ -93,3 +100,39 @@ def test_limits_results_and_handles_empty_input(env):
     assert search(user.id, "   ") == []
     other = make_user(session)
     assert search(other.id, "rockets") == []
+
+
+def test_ignores_vectors_whose_chunk_is_gone(env):
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+    doc_id = add(user.id, "a.txt", "Rockets fly high.")
+    store = search.store
+    store.upsert_document(
+        user.id, doc_id, [ChunkVector(chunk_id=987654, page_number=None, vector=search.embedder.embed_query("Rockets"))]
+    )
+
+    assert 987654 not in {r.chunk_id for r in search(user.id, "rockets")}
+    assert search(user.id, "rockets")
+
+
+def test_reads_only_the_chunks_it_returns_on_postgres(env):
+    session, add, search = env
+    if session.get_bind().dialect.name != "postgresql":
+        pytest.skip("SQLite scores keywords in memory, which reads every chunk")
+    user = make_user(session)
+    session.commit()
+    add(user.id, "big.txt", "\n\n".join(f"Routine paragraph {i} about lunch menus." for i in range(200)))
+    add(user.id, "errors.txt", "Error E-4711 means the upstream certificate expired.")
+
+    statements = []
+    listen = lambda conn, cursor, statement, *args: statements.append(statement)  # noqa: E731
+    event.listen(session.get_bind(), "before_cursor_execute", listen)
+    try:
+        results = search(user.id, "what does E-4711 mean", k=2)
+    finally:
+        event.remove(session.get_bind(), "before_cursor_execute", listen)
+
+    assert results[0].document_title == "errors"
+    reads_text = [s for s in statements if "chunks.content" in s]
+    assert reads_text and all("chunks.id IN" in s for s in reads_text), reads_text

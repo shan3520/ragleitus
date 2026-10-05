@@ -19,6 +19,7 @@ if config.config_file_name:
 
 # Import the application's models to populate target_metadata.
 from app.models import Base  # noqa: E402
+from app.db.schema import include_object  # noqa: E402
 
 # An explicit sqlalchemy.url (set by tests or on the command line) wins;
 # otherwise use the application's configured database.
@@ -32,7 +33,7 @@ target_metadata = Base.metadata
 
 def run_migrations_offline():
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    context.configure(url=url, target_metadata=target_metadata, literal_binds=True, include_object=include_object)
 
     with context.begin_transaction():
         context.run_migrations()
@@ -63,7 +64,12 @@ def run_migrations_online():
 
     with connectable.connect() as connection:
         _widen_version_table(connection)
-        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            include_object=include_object,
+        )
 
         with context.begin_transaction():
             context.run_migrations()

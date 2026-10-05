@@ -16,7 +16,7 @@ the **API** (FastAPI, with Swagger UI) and the **web app** (Next.js, in
 | Accounts | Register and log in (argon2 password hashing, JWT). Every document, key, conversation and metric is private to its owner. |
 | Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, NVIDIA NIM, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
 | Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Re-index or delete at any time. |
-| Chat | Hybrid retrieval (dense vectors + BM25, merged with reciprocal rank fusion), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
+| Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day. |
 | Evaluation | LLM-as-a-judge scoring of any answer: faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
 
@@ -134,8 +134,8 @@ flowchart LR
     end
 
     subgraph Chat turn
-      q[Question] --> dense[Dense search] & bm25[BM25]
-      dense & bm25 --> rrf[Reciprocal rank fusion] --> prompt[Numbered passages] --> gen[Stream answer] --> cite[Resolve n citations]
+      q[Question] --> dense[Dense search] & keyword[Keyword search<br/>PostgreSQL full-text]
+      dense & keyword --> rrf[Reciprocal rank fusion] --> prompt[Numbered passages] --> gen[Stream answer] --> cite[Resolve n citations]
       gen --> tel[Telemetry]
     end
 ```
@@ -170,6 +170,21 @@ flowchart LR
     a single API process.
   - `POST /api/documents/batch-status` reports how many of your documents are
     queued, indexing, ready or failed, with each one's status.
+- **Retrieval.** Each question runs a dense search in Qdrant and a keyword
+  search, and merges the two rankings with reciprocal rank fusion. Dense search
+  finds passages that say the same thing in other words; keyword search finds
+  exact names, codes and numbers that embeddings blur.
+  - On PostgreSQL, keyword search runs in the database: each chunk has a
+    generated `tsvector` column with a GIN index (migration 0025), so a question
+    reads only the chunks that contain its terms. Matches are ranked like BM25:
+    any term matches, rare terms weigh more than common ones (inverse document
+    frequency over your ready chunks), and `ts_rank` with length
+    normalisation scores how often a term appears. Common English words are
+    left out of the query. The `simple` text search configuration lowercases
+    without stemming, so it works the same in every language.
+  - On SQLite (local development and the tests) your chunks are scored with
+    BM25 in memory, which is fine up to tens of thousands of chunks.
+  - Only the passages that are returned are loaded from the database.
 - **Web app.** `frontend/` is a Next.js App Router app. The browser only talks to
   its own origin: a route handler forwards `/backend/*` to `API_URL` at runtime
   (streaming, so chat tokens arrive as they are generated). No CORS setup is
@@ -251,6 +266,15 @@ pytest -q
 The tests need no external services and no network. They use SQLite, an
 in-process Qdrant, a fake embedder and mocked HTTP. `tests/conftest.py` blocks
 outbound connections, so a test that tries to reach a real provider fails.
+
+A few tests also run against a real PostgreSQL when `TEST_POSTGRES_URL` points
+at a database they may wipe; without it they are skipped:
+
+```bash
+docker run -d --name ragforge-test-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=pw postgres:16-alpine
+TEST_POSTGRES_URL=postgresql+psycopg://postgres:pw@127.0.0.1:55432/postgres pytest -q
+```
+
 Schema changes go through Alembic:
 
 ```bash
@@ -306,9 +330,6 @@ container reach the stub on the host:
   embedding model.
 - **LangGraph.** The RAG flow is plain service code; it does not need an agent
   graph yet.
-- **Scale.** BM25 scores a user's chunks in memory on each question. That is fine
-  up to tens of thousands of chunks per user; beyond that it needs a keyword
-  index (e.g. PostgreSQL full-text search).
 
 Some older endpoints still return placeholder data: `/api/export/metrics` and
 `/api/experiments/report`.

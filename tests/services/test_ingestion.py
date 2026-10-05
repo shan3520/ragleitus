@@ -447,7 +447,8 @@ def _index_with_choice(env, document_id, factory):
 
 def test_a_document_is_embedded_with_its_owners_choice_and_records_it(env, vector_stores):
     from app.models.telemetry_event import TelemetryEvent
-    from app.services import vector_store
+    from app.services import embedding_service
+    from app.services.embedding_service import EmbeddingChoice
     from tests.fakes import provider_embedder_factory
 
     _, session, user_id, _, local_store = env
@@ -462,7 +463,7 @@ def test_a_document_is_embedded_with_its_owners_choice_and_records_it(env, vecto
 
     assert doc.status == "ready"
     assert (doc.embedding_provider, doc.embedding_model, doc.embedding_dimension) == ("openai", "text-embedding-3-small", 64)
-    remote = vector_store.store_for("openai/text-embedding-3-small", 64)
+    remote = embedding_service.store_for_choice(EmbeddingChoice("openai", "text-embedding-3-small"), 64)
     assert remote.count(user_id, doc.id) == len(doc.chunks)
     assert local_store.count(user_id, doc.id) == 0
     # The provider calls are in telemetry (the settings check, then indexing).
@@ -470,7 +471,8 @@ def test_a_document_is_embedded_with_its_owners_choice_and_records_it(env, vecto
 
 
 def test_switching_models_moves_the_vectors_to_the_new_collection(env, vector_stores):
-    from app.services import vector_store
+    from app.services import embedding_service
+    from app.services.embedding_service import EmbeddingChoice
     from tests.fakes import provider_embedder_factory
 
     _, session, user_id, _, local_store = env
@@ -484,7 +486,7 @@ def test_switching_models_moves_the_vectors_to_the_new_collection(env, vector_st
     session.commit()
     _index_with_choice(env, doc.id, provider_embedder_factory())
 
-    remote = vector_store.store_for("mistral/mistral-embed", 64)
+    remote = embedding_service.store_for_choice(EmbeddingChoice("mistral", "mistral-embed"), 64)
     assert remote.count(user_id, doc.id) == 1
     assert local_store.count(user_id, doc.id) == 0
 

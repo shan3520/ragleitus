@@ -15,6 +15,7 @@ and the vector size (see VectorStore).
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Callable
 
@@ -107,7 +108,21 @@ def store_for_choice(choice: EmbeddingChoice, dimension: int | None, local_store
         return local_store or get_vector_store()
     if not dimension:
         return None
-    return store_for(f"{choice.provider}/{choice.model}", dimension)
+    return store_for(collection_model_name(choice), dimension)
+
+
+def collection_model_name(choice: EmbeddingChoice) -> str:
+    """What a provider model's collection is named after.
+
+    Collection names keep only lowercase letters and digits, so distinct model
+    names could otherwise share one ("x/y" and "x_y", or "Model" and "model")
+    and mix vectors of different models. A hash of the exact name keeps them
+    apart, and long self-hosted model names are cut to stay within Qdrant's
+    limit on collection names.
+    """
+    exact = f"{choice.provider}/{choice.model}"
+    digest = hashlib.sha256(exact.encode()).hexdigest()[:10]
+    return f"{choice.provider}/{choice.model[:80]}/{digest}"
 
 
 def document_embedding(document: Document) -> dict | None:

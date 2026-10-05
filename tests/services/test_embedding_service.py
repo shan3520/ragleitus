@@ -145,9 +145,22 @@ def test_vectors_are_found_in_each_documents_own_collection(session, user, vecto
     assert len(locations) == 2
     by_name = {getattr(store, "collection", "local"): ids for store, ids in locations}
     assert by_name["local"] == [a.id]
-    assert by_name["chunks_openai_m_8"] == [b.id, c.id]
+    remote = embedding_service.store_for_choice(EmbeddingChoice("openai", "m"), 8)
+    assert by_name[remote.collection] == [b.id, c.id]
     other = make_user(session)
     assert embedding_service.vector_locations(session, other.id, [a.id], local_store=local_store) == []
+
+
+def test_model_names_that_look_alike_get_separate_collections(vector_stores):
+    def collection(provider, model, dimension=8):
+        return embedding_service.store_for_choice(EmbeddingChoice(provider, model), dimension).collection
+
+    names = {collection("custom", m) for m in ("x/y", "x_y", "X-Y", "x y")}
+    assert len(names) == 4
+    assert collection("openai", "text-embedding-3-small").startswith("chunks_openai_text_embedding_3_small_")
+    assert collection("openai", "m", 8) != collection("openai", "m", 16)
+    assert len(collection("custom", "m" * 255)) < 255
+    assert embedding_service.store_for_choice(EmbeddingChoice(LOCAL, "fake-hash"), None, local_store="local") == "local"
 
 
 def test_record_calls_ignores_embedders_without_a_log(session, user):

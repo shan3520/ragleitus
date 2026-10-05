@@ -55,7 +55,7 @@ def _ingest(
     except ingestion.IngestionError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     session.commit()
-    background_tasks.add_task(ingestion.index_document, document.id)
+    ingestion.schedule_indexing(document.id, background_tasks)
     background_tasks.add_task(log_audit_event, action="document_uploaded", user_id=user.id, document_id=document.id)
     return document
 
@@ -144,7 +144,7 @@ def reindex_document(
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     session.commit()
-    background_tasks.add_task(ingestion.index_document, document.id)
+    ingestion.schedule_indexing(document.id, background_tasks)
     return DocumentAccepted(id=document.id, title=document.title, filename=document.filename, status=document.status)
 
 

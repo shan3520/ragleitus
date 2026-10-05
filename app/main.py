@@ -8,6 +8,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.middleware import RequestIDMiddleware, RateLimitMiddleware
+from app.services import ingestion
 from app.api.health import router as health_router
 from app.api.provider_keys import router as provider_keys_router
 from app.api.auth import router as auth_router
@@ -43,6 +44,13 @@ async def lifespan(app: FastAPI):
         "Application starting",
         extra={"version": settings.VERSION, "project": settings.PROJECT_NAME},
     )
+    if settings.task_queue == "inline":
+        # In-process indexing jobs die with the process; pick up any a restart
+        # interrupted. (With Celery, workers do this when they start.)
+        try:
+            ingestion.requeue_stalled()
+        except Exception:
+            logger.exception("Could not re-queue stalled documents")
     yield
     logger.info("Application shutting down")
 

@@ -18,6 +18,12 @@ class Document(Base):
     # pending -> indexing -> ready | failed
     status = Column(String(50), nullable=False, default="pending")
     error = Column(Text, nullable=True)
+    # Identifies the index run that currently owns the document; a newer run
+    # takes over and an older one then discards its work (see ingestion).
+    index_token = Column(String(36), nullable=True)
+    # When the document was last queued or claimed for indexing; used to find
+    # documents whose run was lost.
+    index_updated_at = Column(DateTime(timezone=True), nullable=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=True)
     last_reviewed_at = Column(DateTime, nullable=True)
@@ -33,6 +39,11 @@ class Document(Base):
 
 class Chunk(Base):
     __tablename__ = "chunks"
+    # Chunk ids are also vector point ids, so they must never be reused: an index
+    # run that is superseded removes the vectors of the chunks it created, and a
+    # reused id would remove another run's vector. PostgreSQL sequences never
+    # reuse ids; SQLite needs AUTOINCREMENT for the same guarantee.
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id = Column(Integer, primary_key=True)
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)

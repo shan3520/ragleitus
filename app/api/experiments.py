@@ -39,6 +39,7 @@ class ExperimentCreate(BaseModel):
     evaluate: bool = Field(default=True, description="Score every answer with the LLM judge")
     judge_provider: str | None = Field(default=None, max_length=100, description="Defaults to each variant's own provider")
     judge_model: str | None = Field(default=None, max_length=255)
+    evaluator: str = Field(default="builtin", description="builtin, ragas or deepeval (see GET /api/evaluators)")
     run: bool = Field(default=False, description="Start running it right away")
 
 
@@ -71,7 +72,7 @@ def create_experiment(
         experiment = experiment_service.create_experiment(
             session, user.id, payload.name,
             [c.model_dump() for c in payload.cases], [v.model_dump() for v in payload.variants],
-            payload.document_ids, payload.evaluate, payload.judge_provider, payload.judge_model,
+            payload.document_ids, payload.evaluate, payload.judge_provider, payload.judge_model, payload.evaluator,
         )
         if payload.run:
             experiment_service.start_run(session, user.id, experiment.id)

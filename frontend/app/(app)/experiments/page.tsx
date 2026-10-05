@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type Provider, type PromptSummary, type RetrievalStrategy } from "@/lib/api";
+import { DEFAULT_EVALUATOR, useEvaluators } from "@/lib/evaluators";
 import { MAX_VARIANTS, parseCases, progressPercent } from "@/lib/experiments";
 import { useApi } from "@/lib/use-api";
 import { formatDate } from "@/lib/utils";
@@ -135,6 +136,8 @@ function NewExperiment({ providers, prompts }: { providers: Provider[]; prompts:
   const [questions, setQuestions] = useState("");
   const [rows, setRows] = useState<VariantRow[]>(() => [newRow(first, "A"), newRow(first, "B")]);
   const [evaluate, setEvaluate] = useState(true);
+  const evaluators = useEvaluators();
+  const [evaluator, setEvaluator] = useState(DEFAULT_EVALUATOR);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -158,6 +161,7 @@ function NewExperiment({ providers, prompts }: { providers: Provider[]; prompts:
         name,
         cases,
         evaluate,
+        evaluator,
         run: true,
         variants: rows.map((r) => ({
           label: r.label || undefined,
@@ -227,10 +231,25 @@ function NewExperiment({ providers, prompts }: { providers: Provider[]; prompts:
           </div>
         )}
       </div>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={evaluate} onChange={(e) => setEvaluate(e.target.checked)} />
-        Score every answer with the LLM judge (each variant&apos;s own provider and model)
-      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={evaluate} onChange={(e) => setEvaluate(e.target.checked)} />
+          Score every answer (judged by each variant&apos;s own provider and model) with
+        </label>
+        <Select
+          aria-label="Evaluator"
+          className="h-8 w-auto"
+          value={evaluator}
+          disabled={!evaluate}
+          onChange={(e) => setEvaluator(e.target.value)}
+        >
+          {(evaluators.length ? evaluators : [{ name: DEFAULT_EVALUATOR, label: "Built-in judge", description: "" }]).map((e) => (
+            <option key={e.name} value={e.name} title={e.description}>
+              {e.label}
+            </option>
+          ))}
+        </Select>
+      </div>
       {error && <Alert variant="destructive">{error}</Alert>}
       <div>
         <Button type="submit" disabled={busy}>

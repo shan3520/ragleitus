@@ -1,7 +1,9 @@
 // A minimal OpenAI-compatible server so the end-to-end tests need no real key.
 //
 // Chat answers quote the first retrieved passage and cite it as [1]; judge
-// prompts get fixed JSON scores. Responses stream as SSE like OpenAI's.
+// prompts get fixed JSON scores, and prompts that carry a JSON schema (Ragas
+// and DeepEval through RAGForge's adapters) get an instance of it.
+// Responses stream as SSE like OpenAI's.
 // /embeddings returns word-hashing vectors, so texts that share words are close.
 // Accepts only the key "stub-key".
 //
@@ -17,8 +19,33 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// A value satisfying a JSON schema, as a judge would answer: statements
+// supported ("yes", 1), nothing evasive (noncommittal 0).
+function instanceOf(schema, root = schema, name = "") {
+  if (schema.$ref) return instanceOf(root.$defs?.[schema.$ref.split("/").pop()] ?? {}, root, name);
+  for (const key of ["anyOf", "oneOf", "allOf"]) {
+    if (schema[key]) {
+      const options = schema[key].filter((s) => s.type !== "null");
+      return instanceOf(options[0] ?? schema[key][0], root, name);
+    }
+  }
+  if (schema.enum) return schema.enum.includes("yes") ? "yes" : schema.enum[0];
+  if (schema.type === "object" || schema.properties) {
+    return Object.fromEntries(Object.entries(schema.properties ?? {}).map(([k, v]) => [k, instanceOf(v, root, k)]));
+  }
+  if (schema.type === "array") return [instanceOf(schema.items ?? {}, root, name)];
+  if (schema.type === "integer") return name.includes("noncommittal") ? 0 : 1;
+  if (schema.type === "number") return 1;
+  if (schema.type === "boolean") return true;
+  if (name.includes("verdict")) return "yes";
+  return `A ${name || "value"}.`;
+}
+
+const SCHEMA_MARKER = "matches this JSON schema, and nothing else:\n";
+
 function answerFor(messages) {
   const system = messages[0]?.role === "system" ? messages[0].content : "";
+  if (system.includes(SCHEMA_MARKER)) return JSON.stringify(instanceOf(JSON.parse(system.split(SCHEMA_MARKER)[1])));
   if (system.includes("impartial evaluator")) {
     return JSON.stringify({
       faithfulness: 0.95,

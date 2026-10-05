@@ -15,7 +15,7 @@ it("shows a saved evaluation instead of the button", () => {
       item={{
         ...answer,
         evaluation: {
-          id: 7, message_id: 2, conversation_id: 1, judge_provider: "openai", judge_model: "gpt-4o-mini",
+          id: 7, message_id: 2, conversation_id: 1, evaluator: "builtin", judge_provider: "openai", judge_model: "gpt-4o-mini",
           faithfulness: 0.95, answer_relevancy: 0.9, context_precision: 0.7, context_recall: null,
           hallucination: 0.05, rationale: "Supported by the handbook.", reference_answer: null,
           rouge_l: null, context_overlap: null, created_at: "",

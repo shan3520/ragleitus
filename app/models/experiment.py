@@ -30,6 +30,8 @@ class Experiment(Base):
     document_ids = Column(JSON, nullable=True)
     # Score each answer with the LLM judge; judge_provider/_model default to each variant's own.
     evaluate = Column(Boolean, nullable=False, default=True, server_default="1")
+    # builtin | ragas | deepeval (see app.services.evaluators)
+    evaluator = Column(String(20), nullable=False, default="builtin", server_default="builtin")
     judge_provider = Column(String(100), nullable=True)
     judge_model = Column(String(255), nullable=True)
     # Identifies the run that owns the experiment; a newer run takes over.

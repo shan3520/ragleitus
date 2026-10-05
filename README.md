@@ -19,7 +19,7 @@ the **API** (FastAPI, with Swagger UI) and the **web app** (Next.js, in
 | Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day. |
 | Prompts and experiments | A versioned prompt library you can chat with, and experiments that answer the same questions with several prompts, models and retrieval strategies and compare their quality, latency and cost (run as a LangGraph pipeline), with CSV/JSON export. |
-| Evaluation | LLM-as-a-judge scoring of any answer: faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
+| Evaluation | Scoring of any answer with RAGForge's own LLM judge, Ragas or DeepEval (on your own provider): faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
 
 ## Quick start with Docker Compose
 
@@ -242,6 +242,28 @@ flowchart LR
   - The RAG flow in chat stays plain service code; LangGraph runs the
     experiment pipeline, where its graph of steps and conditional skips (a
     failed generation goes straight to recording) earns its place.
+- **Evaluators.** An answer (in chat or in an experiment) is scored by one of
+  three evaluators (`app/services/evaluators`), all judged by the user's own
+  provider and model and all reporting the same metrics:
+  - `builtin`: RAGForge's LLM judge, one call for all four metrics.
+  - `ragas`: Ragas's faithfulness, answer relevancy (which also embeds, with the
+    user's embedding model), context precision and context recall.
+  - `deepeval`: DeepEval's faithfulness, answer relevancy, contextual
+    precision (contextual relevancy without a reference answer), contextual
+    recall and hallucination.
+  - Ragas and DeepEval never call a model themselves: small adapters (a Ragas
+    `InstructorBaseRagasLLM` and `BaseRagasEmbedding`, a DeepEval
+    `DeepEvalBaseLLM`) route their prompts through our provider adapters and
+    ask for JSON matching each prompt's schema, so keys, providers and
+    telemetry work as for every other call. Their usage analytics are switched
+    off, and DeepEval runs in plain LLM mode (nothing goes to Confident AI).
+    They make several calls per answer, so they cost more than `builtin`.
+  - They are optional extras (`pip install ".[ragas]"`, `".[deepeval]"`); the
+    Docker image and `.[dev]` include both. `GET /api/evaluators` says which
+    are installed, and the web app only offers those.
+  - A metric an evaluator could not score is left empty (Ragas has no
+    faithfulness for an answer that makes no claims). DeepEval 4's
+    hallucination score measures agreement, so it is stored inverted.
 - **Provider adapters.** These live in `app/services/llm`: one adapter for the
   OpenAI-compatible family, one for Gemini, and one using the official
   `anthropic` SDK. All stream text and report token usage the same way.
@@ -305,7 +327,7 @@ counted as `unpriced_requests` in the telemetry summary.
 | `POST/GET /api/experiments`, `GET/DELETE /api/experiments/{id}`, `POST /api/experiments/{id}/run`, `GET /api/experiments/{id}/compare`, `GET /api/experiments/{id}/export?format=csv\|json`, `GET /api/experiments/report` | Experiments |
 | `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`, `POST /api/conversations/{id}/messages` | Chat |
 | `GET /api/telemetry/summary`, `GET /api/telemetry/events` | Telemetry |
-| `POST /api/evaluations`, `GET /api/evaluations` | Evaluation |
+| `POST /api/evaluations`, `GET /api/evaluations`, `GET /api/evaluators` | Evaluation |
 | `GET /health`, `GET /api/health/subsystems` | Health (no login needed) |
 
 Analytics endpoints predate the chat flow and are scoped to the logged-in user:
@@ -376,8 +398,6 @@ container reach the stub on the host:
 
 - **Observability stack.** No Langfuse, OpenTelemetry, Prometheus or Grafana.
   Telemetry is stored in PostgreSQL and served by the API.
-- **Evaluation frameworks.** No Ragas or DeepEval. Evaluation uses its own LLM
-  judge with the same metric names.
 
 One older endpoint still returns placeholder data: `/api/export/metrics`.
 

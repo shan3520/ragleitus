@@ -1,4 +1,5 @@
 import type { Evaluation } from "@/lib/api";
+import { evaluatorLabel } from "@/lib/evaluators";
 import { cn, formatPercent } from "@/lib/utils";
 
 export const METRIC_LABELS: Record<string, string> = {
@@ -38,7 +39,7 @@ export function EvaluationScores({ evaluation, compact = false }: { evaluation: 
       {!compact && evaluation.rationale && <p className="text-xs text-muted-foreground">{evaluation.rationale}</p>}
       {!compact && (
         <p className="text-xs text-muted-foreground">
-          Judge: {evaluation.judge_provider} / {evaluation.judge_model}
+          {evaluatorLabel(evaluation.evaluator ?? "builtin")} · judged by {evaluation.judge_provider} / {evaluation.judge_model}
         </p>
       )}
     </div>

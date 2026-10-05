@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { api, type ExperimentComparison } from "@/lib/api";
+import { evaluatorLabel } from "@/lib/evaluators";
 import { isBest, isRunning, METRICS, progressPercent } from "@/lib/experiments";
 import { useApi } from "@/lib/use-api";
 import { formatCost, formatDate, formatMs } from "@/lib/utils";
@@ -156,7 +157,10 @@ export default function ExperimentPage() {
         <>
           <PageHeader
             title={experiment.name}
-            description={`Created ${formatDate(experiment.created_at)}`}
+            description={[
+              `Created ${formatDate(experiment.created_at)}`,
+              experiment.evaluate ? `scored with ${evaluatorLabel(experiment.evaluator)}` : "not scored",
+            ].join(" · ")}
             actions={
               <div className="flex flex-wrap items-center gap-2">
                 <ExperimentStatusBadge status={experiment.status} />

@@ -124,3 +124,60 @@ class ScriptedProvider(FakeProvider):
             text = f"{self.prefix} {passage.group(1).strip()} [1]" if passage else self.reply
         yield StreamEvent(kind="delta", text=text)
         yield StreamEvent(kind="done", usage=self.usage, model=model, finish_reason="stop")
+
+
+def instance_of(schema: dict, root: dict | None = None, name: str = ""):
+    """A value that satisfies a JSON schema, as a model would answer it:
+    statements supported ("yes", 1), nothing evasive (noncommittal 0)."""
+    root = root or schema
+    if "$ref" in schema:
+        ref = schema["$ref"].split("/")[-1]
+        return instance_of(root.get("$defs", {}).get(ref, {}), root, name)
+    for key in ("anyOf", "oneOf", "allOf"):
+        if key in schema:
+            options = [s for s in schema[key] if s.get("type") != "null"] or schema[key]
+            return instance_of(options[0], root, name)
+    if "enum" in schema:
+        return "yes" if "yes" in schema["enum"] else schema["enum"][0]
+    kind = schema.get("type")
+    if kind == "object" or "properties" in schema:
+        return {k: instance_of(v, root, k) for k, v in schema.get("properties", {}).items()}
+    if kind == "array":
+        return [instance_of(schema.get("items", {}), root, name)]
+    if kind == "integer":
+        return 0 if "noncommittal" in name else 1
+    if kind == "number":
+        return 1.0
+    if kind == "boolean":
+        return True
+    if "verdict" in name:
+        return "yes"
+    return f"A {name or 'value'}."
+
+
+class SchemaJudgeProvider(ScriptedProvider):
+    """A judge that answers Ragas/DeepEval prompts: when the system prompt
+    carries a JSON schema (see evaluators.base), the reply is an instance of
+    it; `bad_replies` replies come first as unreadable text."""
+
+    def __init__(self, bad_replies: int = 0, **kwargs):
+        super().__init__(**kwargs)
+        self.bad_replies = bad_replies
+
+    async def stream(self, messages, model, max_tokens):
+        import json
+
+        system = messages[0].content if messages and messages[0].role == "system" else ""
+        marker = "matches this JSON schema, and nothing else:\n"
+        if marker not in system:
+            async for event in super().stream(messages, model, max_tokens):
+                yield event
+            return
+        self.calls.append({"messages": messages, "model": model, "max_tokens": max_tokens})
+        if self.bad_replies:
+            self.bad_replies -= 1
+            text = "Sorry, here are my thoughts in prose."
+        else:
+            text = json.dumps(instance_of(json.loads(system.split(marker, 1)[1])))
+        yield StreamEvent(kind="delta", text=text)
+        yield StreamEvent(kind="done", usage=self.usage, model=model, finish_reason="stop")

@@ -81,3 +81,32 @@ def test_evaluate_a_chat_answer_end_to_end():
     other_headers, _ = login(client, unique_username("evaluator_other"))
     assert client.post("/api/evaluations", json={"message_id": answer["message_id"]}, headers=other_headers).status_code == 404
     assert client.get("/api/evaluations", headers=other_headers).json()["total"] == 0
+
+
+def test_evaluators_are_listed_and_chosen_per_evaluation():
+    from app.api.deps import get_provider_factory
+    from app.services import evaluators
+    from tests.fakes import FakeFactory, SchemaJudgeProvider
+    from tests.helpers import login, unique_username
+
+    provider = SchemaJudgeProvider(reply="Leave is 25 days [1].")
+    app.dependency_overrides[get_provider_factory] = lambda: FakeFactory(provider)
+    client = TestClient(app)
+    assert client.get("/api/evaluators").status_code == 401
+    headers, _ = login(client, unique_username("evaluator"))
+    listed = client.get("/api/evaluators", headers=headers).json()
+    assert [e["name"] for e in listed] == ["builtin", "ragas", "deepeval"]
+
+    client.post("/api/provider-keys", json={"provider": "openai", "key": "sk-evalkey12345678", "validate": False}, headers=headers)
+    client.post("/api/documents", files={"file": ("hr.txt", b"Leave is 25 days per year.", "text/plain")}, headers=headers)
+    conversation_id = client.post("/api/conversations", json={}, headers=headers).json()["id"]
+    answer = client.post(f"/api/conversations/{conversation_id}/messages", json={"content": "Leave?", "stream": False}, headers=headers).json()
+
+    bad = client.post("/api/evaluations", json={"message_id": answer["message_id"], "evaluator": "magic"}, headers=headers)
+    assert bad.status_code == 400
+    if evaluators.deepeval_evaluator.installed():
+        resp = client.post("/api/evaluations", json={"message_id": answer["message_id"], "evaluator": "deepeval"}, headers=headers)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["evaluator"] == "deepeval"
+        history = client.get(f"/api/evaluations?conversation_id={conversation_id}", headers=headers).json()
+        assert history["items"][0]["evaluator"] == "deepeval"

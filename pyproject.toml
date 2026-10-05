@@ -32,8 +32,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional evaluators (see app/services/evaluators); the Docker image installs both.
+ragas = ["ragas>=0.4,<0.5"]
+deepeval = ["deepeval>=4,<5"]
 dev = [
     "pytest>=8",
+    "ragas>=0.4,<0.5",
+    "deepeval>=4,<5",
 ]
 
 [tool.setuptools.packages.find]
@@ -45,4 +50,7 @@ addopts = "-p no:cacheprovider"
 filterwarnings = [
     "ignore::DeprecationWarning:starlette.*",
     "ignore:Using `httpx` with `starlette.testclient`",
+    # Notices from the optional evaluator libraries about their own changes.
+    "ignore:'HallucinationMetric' now scores:DeprecationWarning",
+    "ignore:`langchain-community` is being sunset:DeprecationWarning",
 ]

@@ -7,8 +7,9 @@
 - assemble_prompt: the variant's prompt (built-in or a library version)
   around the numbered passages, as in chat;
 - generate: the variant's provider and model, with the user's key;
-- evaluate: the LLM judge's scores (if the experiment asks for them) and
-  ROUGE-L against the reference answer (if there is one);
+- evaluate: the experiment's evaluator (the built-in LLM judge, Ragas or
+  DeepEval; if it asks for scores) and ROUGE-L against the reference answer
+  (if there is one);
 - record: one ExperimentResult row.
 
 A failure in retrieve or generate skips straight to record, which stores the
@@ -41,7 +42,8 @@ from app.services.chat_service import build_prompt, extract_citations, prompt_te
 from app.services.llm import ProviderError, ProviderFactory, Usage, complete, create_provider, get_spec
 from app.services.llm.pricing import estimate_cost_usd
 from app.services.provider_key import MissingProviderKeyError, create_user_provider
-from app.services.rag_evaluation import JudgeError, build_judge_prompt, parse_judge_output
+from app.services import embedding_service, rag_evaluation
+from app.services.evaluators import EvaluationError, EvaluationInput
 from app.services.retrieval import RetrievedChunk, retrieve
 from app.services.rouge_scoring import score_rouge_l
 
@@ -149,6 +151,14 @@ def build_graph(
         usage = Usage(event.prompt_tokens, event.completion_tokens)
         return {"answer": result.text, "model": model, "usage": usage, "latency_ms": latency_ms}
 
+    embedders: list = []
+
+    def embedder_for_ragas():
+        # The user's embedding model, built once per run (Ragas's answer relevancy embeds).
+        if not embedders:
+            embedders.append(rag_evaluation.user_embedder(session, user_id))
+        return embedders[0]
+
     def evaluate_node(state: CaseState) -> dict:
         variant = variants[state["variant_id"]]
         reference = state.get("reference")
@@ -159,34 +169,30 @@ def build_graph(
         judge_model = experiment.judge_model or (
             variant.model if judge_provider == variant.provider else get_spec(judge_provider).default_model
         )
-        prompt = build_judge_prompt(state["question"], _context(state["sources"]), state["answer"], reference)
-        prompt_text = "\n\n".join(m.content for m in prompt)
-        started = time.perf_counter()
+        item = EvaluationInput(
+            question=state["question"],
+            answer=state["answer"],
+            contexts=[s.content for s in state["sources"]],
+            reference=reference,
+        )
+        judge = None
         try:
-            judge = create_user_provider(session, user_id, judge_provider, factory)
-            result = _complete(judge, prompt, judge_model, 4000)
-            telemetry.record_llm_call(
-                session, user_id=user_id, operation="evaluation", provider=judge_provider,
-                model=result.model or judge_model, latency_ms=(time.perf_counter() - started) * 1000,
-                usage=result.usage, prompt_text=prompt_text, completion_text=result.text,
-            )
-            judged = parse_judge_output(result.text, has_reference=bool(reference))
-        except MissingProviderKeyError:
-            return {"scores": scores, "error": f"Evaluation failed: no API key stored for provider '{judge_provider}'."}
-        except ProviderError as exc:
-            telemetry.record_llm_call(
-                session, user_id=user_id, operation="evaluation", provider=judge_provider, model=judge_model,
-                latency_ms=(time.perf_counter() - started) * 1000, error=exc, prompt_text=prompt_text,
-            )
+            judge = rag_evaluation.resolve_judge(session, user_id, judge_provider, judge_model, factory)
+            embedder = embedder_for_ragas() if experiment.evaluator == "ragas" else None
+            judged = asyncio.run(rag_evaluation.score(item, judge, experiment.evaluator, embedder))
+        except EvaluationError as exc:
             return {"scores": scores, "error": f"Evaluation failed: {exc.message}"}
-        except JudgeError as exc:
-            return {"scores": scores, "error": f"Evaluation failed: {exc.message}"}
+        finally:
+            if judge is not None:
+                rag_evaluation.record_judge_calls(session, user_id, judge)
+            if embedders:
+                embedding_service.record_calls(session, user_id, embedders[0])
         scores.update(
             faithfulness=judged.faithfulness,
             answer_relevancy=judged.answer_relevancy,
             context_precision=judged.context_precision,
-            context_recall=judged.context_recall,
-            hallucination=round(1.0 - judged.faithfulness, 4),
+            context_recall=judged.context_recall if reference else None,
+            hallucination=judged.hallucination_score(),
             judge_rationale=judged.rationale,
         )
         return {"scores": scores}

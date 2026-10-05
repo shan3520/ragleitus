@@ -1,4 +1,4 @@
-"""Celery worker: runs document indexing outside the API process.
+"""Celery worker: runs document indexing and experiments outside the API process.
 
 Used when TASK_QUEUE=celery. Start it with
 
@@ -18,7 +18,7 @@ from celery import Celery
 from celery.signals import worker_ready
 
 from app.core.config import settings
-from app.services import ingestion
+from app.services import experiment_runner, ingestion
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,13 @@ celery_app.conf.update(
 @celery_app.task(name="ragforge.index_document")
 def index_document_task(document_id: int) -> None:
     ingestion.index_document(document_id)
+
+
+@celery_app.task(name="ragforge.run_experiment")
+def run_experiment_task(experiment_id: int) -> None:
+    # A redelivered job finds the experiment already running and does nothing;
+    # a run lost with its worker can be started again once it is stale.
+    experiment_runner.run_experiment(experiment_id)
 
 
 @worker_ready.connect

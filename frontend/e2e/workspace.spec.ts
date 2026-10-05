@@ -104,6 +104,38 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
     await expect(page.locator('[aria-current="location"]')).toContainText("E-4711");
   });
 
+  await test.step("save a prompt and compare it with the built-in one in an experiment", async () => {
+    await page.goto("/prompts");
+    await page.getByLabel("Name", { exact: true }).fill("Brief");
+    // The editor starts from the built-in prompt.
+    await expect(page.getByLabel("System prompt")).toHaveValue(/\{context\}/);
+    await page.getByLabel("System prompt").fill("Answer briefly, citing passages as [n].\n\n{context}");
+    await page.getByRole("button", { name: "Save prompt" }).click();
+    await expect(page.getByRole("heading", { name: "Brief" })).toBeVisible();
+    await expect(page.getByText("Version 1")).toBeVisible();
+
+    await page.goto("/experiments");
+    await page.getByLabel("Name", { exact: true }).fill("Built-in vs brief");
+    await page.getByLabel("Questions").fill("What does error code E-4711 mean? | The upstream certificate expired.");
+    await page.locator("#variant-0-model").fill("stub-model");
+    await page.locator("#variant-1-model").fill("stub-model");
+    await page.locator("#variant-1-prompt").selectOption({ label: "Brief v1" });
+    await page.locator("#variant-1-retrieval").selectOption("keyword");
+    await page.getByRole("button", { name: "Create and run" }).click();
+
+    await expect(page).toHaveURL(/\/experiments\/\d+$/);
+    await expect(page.getByText("Completed", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: "Judge scores" })).toBeVisible();
+    await expect(page.locator(".recharts-bar-rectangle").first()).toBeVisible();
+    await expect(page.getByTestId("variant-answer")).toHaveCount(2);
+    await expect(page.getByTestId("variant-answer").first()).toContainText("E-4711");
+    await expect(page.getByRole("cell", { name: /Brief v1 · stub-model · Keyword/ })).toBeVisible();
+
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "CSV" }).click();
+    expect((await download).suggestedFilename()).toBe("Built-in-vs-brief.csv");
+  });
+
   await test.step("telemetry and evaluations show the calls", async () => {
     await page.goto("/telemetry");
     await expect(page.getByRole("heading", { name: "Requests per day" })).toBeVisible();

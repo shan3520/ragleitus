@@ -215,3 +215,18 @@ def test_a_provider_that_cannot_be_used_falls_back_to_keywords_with_a_warning(en
     warnings.clear()
     assert search(user.id, "passwords rotated", warnings=warnings)
     assert "No API key stored for OpenAI" in warnings[0]
+
+
+def test_dense_or_keyword_strategies_use_one_ranking(env):
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+    add(user.id, "errors.txt", "Error E-4711 means the upstream certificate expired.")
+    add(user.id, "hr.txt", "Employees receive 25 days of annual leave.")
+
+    keyword = search(user.id, "E-4711", strategy="keyword")
+    assert keyword and all(r.dense_rank is None and r.keyword_rank for r in keyword)
+    dense = search(user.id, "annual leave", strategy="dense")
+    assert dense and all(r.keyword_rank is None and r.dense_rank for r in dense)
+    with pytest.raises(ValueError):
+        search(user.id, "x", strategy="magic")

@@ -115,8 +115,122 @@ export interface Source {
   page_number: number | null;
 }
 
+export interface PromptVersion {
+  id: number;
+  version: number;
+  template: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface PromptSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string | null;
+  version_count: number;
+  latest_version: PromptVersion | null;
+}
+
+export interface PromptDetail extends PromptSummary {
+  /** Newest first. */
+  versions: PromptVersion[];
+}
+
+export type RetrievalStrategy = "hybrid" | "dense" | "keyword";
+
+export interface ExperimentCase {
+  question: string;
+  reference_answer?: string | null;
+}
+
+export interface ExperimentVariantInput {
+  label?: string;
+  prompt_version_id?: number | null;
+  provider: string;
+  model?: string;
+  retrieval?: RetrievalStrategy;
+  top_k?: number;
+}
+
+export interface ExperimentVariant {
+  id: number;
+  label: string;
+  prompt_version_id: number | null;
+  prompt_label: string;
+  provider: string;
+  model: string;
+  retrieval: RetrievalStrategy;
+  top_k: number;
+}
+
+export type ExperimentStatus = "draft" | "queued" | "running" | "completed" | "failed";
+
+export interface Experiment {
+  id: number;
+  name: string;
+  status: ExperimentStatus;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  case_count: number;
+  variants: ExperimentVariant[];
+  document_ids: number[] | null;
+  evaluate: boolean;
+  judge_provider: string | null;
+  judge_model: string | null;
+  progress: { done: number; total: number };
+  cases?: ExperimentCase[];
+}
+
+export type ExperimentMetric =
+  | "quality"
+  | "faithfulness"
+  | "answer_relevancy"
+  | "context_precision"
+  | "context_recall"
+  | "hallucination"
+  | "rouge_l"
+  | "latency_ms"
+  | "cost_usd";
+
+export interface VariantSummary extends ExperimentVariant {
+  results: number;
+  errors: number;
+  averages: Record<ExperimentMetric, number | null>;
+  total_cost_usd: number | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
+export interface CaseResult {
+  answer: string | null;
+  citations: Citation[];
+  error: string | null;
+  latency_ms: number | null;
+  cost_usd: number | null;
+  quality: number | null;
+  faithfulness: number | null;
+  answer_relevancy: number | null;
+  context_precision: number | null;
+  context_recall: number | null;
+  hallucination: number | null;
+  rouge_l: number | null;
+  judge_rationale: string | null;
+}
+
+export interface ExperimentComparison {
+  experiment: Experiment;
+  variants: VariantSummary[];
+  /** Metric -> id of the best variant (only when at least two have a value). */
+  best: Partial<Record<ExperimentMetric, number>>;
+  cases: (ExperimentCase & { index: number; results: Record<string, CaseResult> })[];
+}
+
 export interface Conversation {
   id: number;
+  prompt_version_id?: number | null;
   title: string;
   provider: string | null;
   model: string | null;
@@ -330,6 +444,39 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
 
 const json = (body: unknown) => JSON.stringify(body);
 
+/** Fetch a file the API serves as an attachment and hand it to the browser to save. */
+export async function download(path: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = tokenStore.get();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  let response: Response;
+  try {
+    response = await fetch(`${API_PREFIX}${path}`, { headers });
+  } catch {
+    throw new ApiError(0, errorMessage(0, null));
+  }
+  reportStatus(response.status, Boolean(token));
+  if (!response.ok) {
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(response.status, errorMessage(response.status, payload));
+  }
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "download";
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ---------------------------------------------------------------- endpoints
 
 export const api = {
@@ -373,6 +520,34 @@ export const api = {
       method: "POST",
       body: json({ scope }),
     }),
+
+  prompts: () => request<PromptSummary[]>("/api/prompts"),
+  prompt: (id: number) => request<PromptDetail>(`/api/prompts/${id}`),
+  defaultPrompt: () => request<{ template: string }>("/api/prompts/default"),
+  createPrompt: (body: { name: string; description?: string; template: string; note?: string }) =>
+    request<PromptDetail>("/api/prompts", { method: "POST", body: json(body) }),
+  updatePrompt: (id: number, body: { name?: string; description?: string }) =>
+    request<PromptDetail>(`/api/prompts/${id}`, { method: "PATCH", body: json(body) }),
+  addPromptVersion: (id: number, body: { template: string; note?: string }) =>
+    request<PromptVersion>(`/api/prompts/${id}/versions`, { method: "POST", body: json(body) }),
+  clonePrompt: (id: number, name?: string) =>
+    request<PromptDetail>(`/api/prompts/${id}/clone`, { method: "POST", body: json({ name }) }),
+  deletePrompt: (id: number) => request<void>(`/api/prompts/${id}`, { method: "DELETE" }),
+
+  experiments: () => request<Experiment[]>("/api/experiments"),
+  experiment: (id: number) => request<Experiment>(`/api/experiments/${id}`),
+  createExperiment: (body: {
+    name: string;
+    cases: ExperimentCase[];
+    variants: ExperimentVariantInput[];
+    evaluate?: boolean;
+    run?: boolean;
+  }) => request<Experiment>("/api/experiments", { method: "POST", body: json(body) }),
+  runExperiment: (id: number) => request<Experiment>(`/api/experiments/${id}/run`, { method: "POST" }),
+  deleteExperiment: (id: number) => request<void>(`/api/experiments/${id}`, { method: "DELETE" }),
+  compareExperiment: (id: number) => request<ExperimentComparison>(`/api/experiments/${id}/compare`),
+  /** The export as a file (CSV or JSON), named by the server. */
+  exportExperiment: (id: number, format: "csv" | "json") => download(`/api/experiments/${id}/export?format=${format}`),
 
   conversations: () => request<Conversation[]>("/api/conversations"),
   conversation: (id: number) => request<ConversationDetail>(`/api/conversations/${id}`),

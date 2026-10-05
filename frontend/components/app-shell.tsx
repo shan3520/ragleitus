@@ -12,7 +12,9 @@ import {
   LogOut,
   Menu,
   MessageSquare,
+  ScrollText,
   Settings,
+  TestTubes,
   X,
 } from "lucide-react";
 
@@ -26,6 +28,8 @@ export const NAV_ITEMS = [
   { href: "/documents", label: "Documents", icon: FileText },
   { href: "/providers", label: "Providers", icon: KeyRound },
   { href: "/telemetry", label: "Telemetry", icon: Activity },
+  { href: "/prompts", label: "Prompts", icon: ScrollText },
+  { href: "/experiments", label: "Experiments", icon: TestTubes },
   { href: "/evaluations", label: "Evaluations", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;

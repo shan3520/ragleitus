@@ -22,7 +22,7 @@ from app.api.chunking import router as chunking_router
 from app.api.export import router as export_router
 from app.api.batch_upload import router as batch_router
 from app.api.subsystem_health import router as subsystem_router
-from app.api.experiment_reports import router as reports_router
+from app.api.experiments import router as experiments_router
 from app.api.config_summary import router as config_summary_router
 from app.api.groups import router as groups_router
 from app.api.unanswered_queries import router as unanswered_queries_router
@@ -31,6 +31,7 @@ from app.api.history import router as history_router
 from app.api.telemetry import router as telemetry_router
 from app.api.chat import router as chat_router
 from app.api.settings import router as settings_router
+from app.api.prompts import router as prompts_router
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ def create_app() -> FastAPI:
     app.include_router(export_router)
     app.include_router(batch_router)
     app.include_router(subsystem_router)
-    app.include_router(reports_router)
+    app.include_router(experiments_router)
     app.include_router(config_summary_router)
     app.include_router(groups_router, prefix="/api/groups")
     app.include_router(unanswered_queries_router)
@@ -120,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(telemetry_router)
     app.include_router(chat_router)
     app.include_router(settings_router)
+    app.include_router(prompts_router)
 
     return app
 

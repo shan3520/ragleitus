@@ -29,6 +29,7 @@ class ConversationOut(BaseModel):
     title: str
     provider: str | None
     model: str | None
+    prompt_version_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -58,6 +59,11 @@ class MessageCreate(BaseModel):
     provider: str | None = None
     model: str | None = None
     document_ids: list[int] | None = Field(default=None, description="Only search these documents")
+    prompt_version_id: int | None = Field(
+        default=None,
+        description="Answer with this prompt-library version from now on (null: the built-in prompt). "
+        "Leave out to keep the conversation's prompt.",
+    )
     stream: bool = True
 
 
@@ -127,6 +133,9 @@ async def send_message(
             chat_service.prepare_turn,
             session, user.id, conversation_id, payload.content,
             provider=payload.provider, model=payload.model, document_ids=payload.document_ids, factory=factory,
+            prompt_version_id=(
+                payload.prompt_version_id if "prompt_version_id" in payload.model_fields_set else chat_service.KEEP_PROMPT
+            ),
         )
     except chat_service.ChatError as exc:
         _raise(exc)

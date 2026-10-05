@@ -179,8 +179,12 @@ def answered_history(messages: list[Message], max_turns: int) -> list[Message]:
     return [m for pair in pairs[-max_turns:] for m in pair]
 
 
-def build_prompt(history: list[Message], question: str, sources: list[RetrievedChunk]) -> list[ChatMessage]:
-    system = format_prompt(SYSTEM_PROMPT, {"context": format_context(sources)})
+def build_prompt(
+    history: list[Message], question: str, sources: list[RetrievedChunk], template: str | None = None
+) -> list[ChatMessage]:
+    """The messages for the model: the system prompt with the passages (the
+    built-in one, or a prompt-library template), the history and the question."""
+    system = format_prompt(template or SYSTEM_PROMPT, {"context": format_context(sources), "question": question})
     turns = [ChatMessage(m.role, m.content) for m in history if m.role in ("user", "assistant")]
     return [ChatMessage("system", system), *turns, ChatMessage("user", question)]
 
@@ -212,6 +216,28 @@ def _source_dict(number: int, source: RetrievedChunk) -> dict:
 
 # ---------------------------------------------------------------- turns
 
+# prepare_turn: keep the conversation's prompt choice.
+KEEP_PROMPT = object()
+
+
+class PromptVersionNotFoundError(ChatError):
+    status_code = 404
+
+
+def prompt_template(session: Session, user_id: int, version_id: int) -> str:
+    """The template of a prompt-library version the user owns."""
+    from app.models.prompt import Prompt, PromptVersion
+
+    template = (
+        session.query(PromptVersion.template)
+        .join(Prompt, PromptVersion.prompt_id == Prompt.id)
+        .filter(PromptVersion.id == version_id, Prompt.user_id == user_id)
+        .scalar()
+    )
+    if template is None:
+        raise PromptVersionNotFoundError("Prompt version not found")
+    return template
+
 
 def prepare_turn(
     session: Session,
@@ -223,11 +249,19 @@ def prepare_turn(
     document_ids: list[int] | None = None,
     factory: ProviderFactory = create_provider,
     retriever: Callable[..., list[RetrievedChunk]] = retrieve,
+    prompt_version_id: int | None | object = KEEP_PROMPT,
 ) -> PreparedTurn:
+    """`prompt_version_id`: a prompt-library version to answer with from now
+    on, None for the built-in prompt, or KEEP_PROMPT for the conversation's."""
     content = content.strip()
     if not content:
         raise ChatError("Message must not be empty")
     conversation = get_conversation(session, user_id, conversation_id)
+    if prompt_version_id is not KEEP_PROMPT:
+        if prompt_version_id is not None:
+            prompt_template(session, user_id, prompt_version_id)  # must be the user's
+        conversation.prompt_version_id = prompt_version_id
+    template = prompt_template(session, user_id, conversation.prompt_version_id) if conversation.prompt_version_id else None
     provider_name, model_name = resolve_provider_choice(session, user_id, conversation, provider, model)
     try:
         chat_provider = create_user_provider(session, user_id, provider_name, factory)
@@ -237,7 +271,7 @@ def prepare_turn(
     history = answered_history(list(conversation.messages), settings.chat_history_turns)
     warnings: list[str] = []
     sources = retriever(session, user_id, content, document_ids=document_ids, warnings=warnings)
-    prompt = build_prompt(history, content, sources)
+    prompt = build_prompt(history, content, sources, template)
 
     user_message = Message(conversation_id=conversation.id, role="user", content=content)
     session.add(user_message)

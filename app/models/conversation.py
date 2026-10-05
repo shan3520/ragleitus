@@ -19,6 +19,8 @@ class Conversation(Base):
     # Defaults for new messages; each message records what actually answered it.
     provider = Column(String(100), nullable=True)
     model = Column(String(255), nullable=True)
+    # The prompt-library version used as system prompt; NULL: the built-in one.
+    prompt_version_id = Column(Integer, ForeignKey("prompt_versions.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
 

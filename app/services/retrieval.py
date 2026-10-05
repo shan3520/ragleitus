@@ -31,6 +31,8 @@ from app.services.llm.base import ProviderError
 from app.services.rrf import reciprocal_rank_fusion
 from app.services.vector_store import VectorStore, get_vector_store
 
+STRATEGIES = ("hybrid", "dense", "keyword")
+
 # Each ranker contributes more candidates than are finally returned, so a
 # chunk ranked moderately by both can still make the cut after fusion.
 CANDIDATE_MULTIPLIER = 4
@@ -80,6 +82,7 @@ def retrieve(
     store: VectorStore | None = None,
     embedder_factory: EmbedderFactory | None = None,
     warnings: list[str] | None = None,
+    strategy: str = "hybrid",
 ) -> list[RetrievedChunk]:
     """The passages that best answer `query`, best first, at most `k`.
 
@@ -90,9 +93,14 @@ def retrieve(
     provider is down), those documents are searched by keyword only, and a
     message saying so is appended to `warnings`.
 
+    `strategy` is "hybrid" (both rankings fused), "dense" (vectors only) or
+    "keyword" (keyword search only); experiments compare them.
+
     `embedder` and `store` replace the local model and its store (tests);
     `embedder_factory` replaces how a provider embedder is built.
     """
+    if strategy not in STRATEGIES:
+        raise ValueError(f"unknown retrieval strategy {strategy!r}")
     k = k or settings.retrieval_top_k
     if not query.strip():
         return []
@@ -105,7 +113,7 @@ def retrieve(
         return []
 
     dense_rankings: list[list[int]] = []
-    for choice, dimension, count in groups:
+    for choice, dimension, count in groups if strategy != "keyword" else ():
         if choice.is_local:
             local = embedder or get_embedder()
             hits = (store or get_vector_store()).search(
@@ -133,7 +141,9 @@ def retrieve(
             hits = group_store.search(user_id, vector, limit=candidates, document_ids=document_ids)
         dense_rankings.append([hit.chunk_id for hit in hits])
 
-    keyword_ranking = keyword_search.search(session, user_id, query, candidates, document_ids)
+    keyword_ranking = (
+        keyword_search.search(session, user_id, query, candidates, document_ids) if strategy != "dense" else []
+    )
 
     # Resolve every candidate against the database at once: this checks that
     # vector hits still belong to a ready document of the user's, and loads

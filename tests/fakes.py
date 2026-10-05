@@ -91,3 +91,36 @@ def provider_embedder_factory(**kwargs):
 
     factory.built = built
     return factory
+
+
+JUDGE_REPLY = (
+    '{"faithfulness": 0.9, "answer_relevancy": 0.8, "context_precision": 0.5, '
+    '"context_recall": 0.6, "rationale": "Fake judge."}'
+)
+
+
+class ScriptedProvider(FakeProvider):
+    """Answers like a RAG model and judges like the LLM judge: judge prompts
+    get `judge_reply`; other prompts get "<prefix> <first passage> [1]" (or
+    `reply` when there is no passage). `fail_when(messages)` makes a call fail."""
+
+    def __init__(self, prefix: str = "Answer:", judge_reply: str = JUDGE_REPLY, fail_when=None, **kwargs):
+        super().__init__(**kwargs)
+        self.prefix = prefix
+        self.judge_reply = judge_reply
+        self.fail_when = fail_when
+
+    async def stream(self, messages, model, max_tokens):
+        self.calls.append({"messages": messages, "model": model, "max_tokens": max_tokens})
+        if self.fail_when and self.fail_when(messages):
+            raise ProviderError("Fake provider is down", 503)
+        system = messages[0].content if messages and messages[0].role == "system" else ""
+        if "impartial evaluator" in system:
+            text = self.judge_reply
+        else:
+            import re
+
+            passage = re.search(r"\[1\] \([^)]*\)\n(.+)", system)
+            text = f"{self.prefix} {passage.group(1).strip()} [1]" if passage else self.reply
+        yield StreamEvent(kind="delta", text=text)
+        yield StreamEvent(kind="done", usage=self.usage, model=model, finish_reason="stop")

@@ -1,4 +1,4 @@
-from .evaluation import Base, Prompt, Experiment, Evaluation
+from .evaluation import Base, Prompt, PromptVersion, Experiment, ExperimentVariant, ExperimentResult, Evaluation
 from .user import User
 from .provider_key import ProviderKey
 from .document import Document, Chunk
@@ -11,4 +11,4 @@ from .conversation import Conversation, Message
 from .answer_evaluation import AnswerEvaluation
 from .user_settings import UserSettings
 
-__all__ = ["Base", "User", "Prompt", "Experiment", "Evaluation", "ProviderKey", "Document", "Chunk", "Group", "SearchFeedback", "QueryCluster", "AuditLog", "TelemetryEvent", "Conversation", "Message", "AnswerEvaluation", "UserSettings"]
+__all__ = ["Base", "User", "Prompt", "PromptVersion", "Experiment", "ExperimentVariant", "ExperimentResult", "Evaluation", "ProviderKey", "Document", "Chunk", "Group", "SearchFeedback", "QueryCluster", "AuditLog", "TelemetryEvent", "Conversation", "Message", "AnswerEvaluation", "UserSettings"]

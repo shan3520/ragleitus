@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.database import get_db
 from app.models.user import User
-from app.services import document_service, group_service, ingestion
+from app.services import document_service, embedding_service, group_service, ingestion
 from app.services.audit_service import log_audit_event
 
 router = APIRouter(tags=["documents"])
@@ -125,6 +125,7 @@ def get_document(document_id: int, user: User = Depends(get_current_user), sessi
         "filename": document.filename,
         "group_id": document.group_id,
         "created_at": document.created_at,
+        "embedding": embedding_service.document_embedding(document),
         "chunks": [
             {"id": chunk.id, "sequence_order": chunk.sequence_order, "page_number": chunk.page_number, "content": chunk.content}
             for chunk in sorted(document.chunks, key=lambda c: c.sequence_order)

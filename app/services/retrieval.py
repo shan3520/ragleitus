@@ -19,12 +19,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.document import Chunk, Document
-from app.services import keyword_search
+from app.services import embedding_service, keyword_search
+from app.services.embedding_service import EmbedderFactory, EmbeddingUnavailable
 from app.services.embeddings import Embedder, get_embedder
+from app.services.llm.base import ProviderError
 from app.services.rrf import reciprocal_rank_fusion
 from app.services.vector_store import VectorStore, get_vector_store
 
@@ -45,6 +48,28 @@ class RetrievedChunk:
     keyword_rank: int | None
 
 
+def _embedding_groups(session: Session, user_id: int, document_ids: list[int] | None):
+    """The embedding models of the user's ready documents: (choice, dimension, document count)."""
+    query = (
+        session.query(Document.embedding_provider, Document.embedding_model, Document.embedding_dimension, func.count())
+        .filter(Document.user_id == user_id, Document.status == "ready")
+        .group_by(Document.embedding_provider, Document.embedding_model, Document.embedding_dimension)
+    )
+    if document_ids:
+        query = query.filter(Document.id.in_(document_ids))
+    groups: dict[tuple, list] = {}
+    for provider, model, dimension, count in query.all():
+        choice = embedding_service.document_choice(provider, model)
+        # Every local document is searched with the current local model.
+        key = (choice, None if choice.is_local else dimension)
+        groups.setdefault(key, [choice, key[1], 0])[2] += count
+    return [tuple(group) for group in groups.values()]
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
 def retrieve(
     session: Session,
     user_id: int,
@@ -53,29 +78,67 @@ def retrieve(
     document_ids: list[int] | None = None,
     embedder: Embedder | None = None,
     store: VectorStore | None = None,
+    embedder_factory: EmbedderFactory | None = None,
+    warnings: list[str] | None = None,
 ) -> list[RetrievedChunk]:
+    """The passages that best answer `query`, best first, at most `k`.
+
+    Documents may have been embedded with different models (see
+    embedding_service): the question is embedded once per model and searched
+    in that model's collection, and each model's ranking takes part in the
+    fusion. If a provider's model can't be used (its key was removed, the
+    provider is down), those documents are searched by keyword only, and a
+    message saying so is appended to `warnings`.
+
+    `embedder` and `store` replace the local model and its store (tests);
+    `embedder_factory` replaces how a provider embedder is built.
+    """
     k = k or settings.retrieval_top_k
     if not query.strip():
         return []
-    embedder = embedder or get_embedder()
-    store = store or get_vector_store()
     candidates = k * CANDIDATE_MULTIPLIER
 
     # Without a ready document there is nothing to find; don't embed the query
     # or call the vector store (chat still works without documents).
-    has_documents = session.query(Document.id).filter(Document.user_id == user_id, Document.status == "ready")
-    if document_ids:
-        has_documents = has_documents.filter(Document.id.in_(document_ids))
-    if has_documents.first() is None:
+    groups = _embedding_groups(session, user_id, document_ids)
+    if not groups:
         return []
 
-    dense_hits = store.search(user_id, embedder.embed_query(query), limit=candidates, document_ids=document_ids)
+    dense_rankings: list[list[int]] = []
+    for choice, dimension, count in groups:
+        if choice.is_local:
+            local = embedder or get_embedder()
+            hits = (store or get_vector_store()).search(
+                user_id, local.embed_query(query), limit=candidates, document_ids=document_ids
+            )
+        else:
+            group_store = embedding_service.store_for_choice(choice, dimension)
+            if group_store is None:
+                continue  # indexed without any text, so without vectors
+            provider_embedder = None
+            try:
+                provider_embedder = (embedder_factory or embedding_service.build_embedder)(session, user_id, choice)
+                vector = provider_embedder.embed_query(query)
+            except (EmbeddingUnavailable, ProviderError) as exc:
+                if warnings is not None:
+                    reason = exc.message if isinstance(exc, ProviderError) else str(exc)
+                    warnings.append(
+                        f"{_plural(count, 'document')} embedded with {choice.provider}/{choice.model} "
+                        f"could only be searched by keyword: {reason}"
+                    )
+                continue
+            finally:
+                if provider_embedder is not None:
+                    embedding_service.record_calls(session, user_id, provider_embedder)
+            hits = group_store.search(user_id, vector, limit=candidates, document_ids=document_ids)
+        dense_rankings.append([hit.chunk_id for hit in hits])
+
     keyword_ranking = keyword_search.search(session, user_id, query, candidates, document_ids)
 
     # Resolve every candidate against the database at once: this checks that
     # vector hits still belong to a ready document of the user's, and loads
     # what the results need.
-    candidate_ids = {hit.chunk_id for hit in dense_hits} | set(keyword_ranking)
+    candidate_ids = {chunk_id for ranking in dense_rankings for chunk_id in ranking} | set(keyword_ranking)
     if not candidate_ids:
         return []
     rows_query = (
@@ -87,11 +150,14 @@ def retrieve(
         rows_query = rows_query.filter(Document.id.in_(document_ids))
     by_id = {row[0]: row for row in rows_query.all()}
 
-    dense_ranking = [hit.chunk_id for hit in dense_hits if hit.chunk_id in by_id]
+    dense_rankings = [[chunk_id for chunk_id in ranking if chunk_id in by_id] for ranking in dense_rankings]
     keyword_ranking = [chunk_id for chunk_id in keyword_ranking if chunk_id in by_id]
 
-    fused = reciprocal_rank_fusion([[str(c) for c in dense_ranking], [str(c) for c in keyword_ranking]])
-    dense_pos = {chunk_id: i + 1 for i, chunk_id in enumerate(dense_ranking)}
+    # Scores of different embedding models can't be compared, but ranks can:
+    # each model's ranking enters the fusion on its own. A chunk is only ever
+    # in one of them, since a document is embedded with one model.
+    fused = reciprocal_rank_fusion([[str(c) for c in ranking] for ranking in (*dense_rankings, keyword_ranking)])
+    dense_pos = {chunk_id: i + 1 for ranking in dense_rankings for i, chunk_id in enumerate(ranking)}
     keyword_pos = {chunk_id: i + 1 for i, chunk_id in enumerate(keyword_ranking)}
 
     results = []

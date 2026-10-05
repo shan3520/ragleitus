@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Page, PageHeader } from "@/components/app-shell";
+import { EmbeddingSettingsCard } from "@/components/embedding-settings";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -87,6 +88,18 @@ export default function SettingsPage() {
               Sign out
             </Button>
           </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Embeddings</CardTitle>
+          <CardDescription>
+            The model that turns your documents and questions into vectors. The local model runs on this server and needs
+            no key; a provider embeds with your own key. Documents indexed from now on use your choice.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <EmbeddingSettingsCard />
         </CardContent>
       </Card>
       <Card>

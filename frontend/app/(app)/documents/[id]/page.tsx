@@ -11,6 +11,7 @@ import { Alert } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
+import { embeddingLabel } from "@/lib/embeddings";
 import { useApi } from "@/lib/use-api";
 import { formatDate } from "@/lib/utils";
 
@@ -63,7 +64,13 @@ export default function DocumentDetailPage() {
         <>
           <PageHeader
             title={doc.data.title}
-            description={[doc.data.filename, formatDate(doc.data.created_at)].filter(Boolean).join(" · ")}
+            description={[
+              doc.data.filename,
+              formatDate(doc.data.created_at),
+              doc.data.embedding && `Embedded with ${embeddingLabel(doc.data.embedding)}`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
             actions={<DocumentStatusBadge status={doc.data.status} />}
           />
           {doc.data.error && <Alert variant="destructive">Indexing failed: {doc.data.error}</Alert>}

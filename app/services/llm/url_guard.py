@@ -34,16 +34,37 @@ def is_public_address(address: str) -> bool:
     return ip.is_global
 
 
+def _host(url: str) -> str:
+    host = urlsplit(url).hostname
+    if not host:
+        raise ProviderError("The base URL has no host.", status_code=400)
+    return host
+
+
+def _check_addresses(infos) -> None:
+    if not infos or not all(is_public_address(info[4][0]) for info in infos):
+        raise ProviderError(PRIVATE_URL_MESSAGE, status_code=400)
+
+
 async def ensure_public_url(url: str) -> None:
     """Raise ProviderError (status 400) unless every address of the URL's host is public."""
     if settings.allow_private_provider_urls:
         return
-    host = urlsplit(url).hostname
-    if not host:
-        raise ProviderError("The base URL has no host.", status_code=400)
+    host = _host(url)
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except socket.gaierror:
         raise ProviderError(f"Could not resolve {host}.") from None
-    if not infos or not all(is_public_address(info[4][0]) for info in infos):
-        raise ProviderError(PRIVATE_URL_MESSAGE, status_code=400)
+    _check_addresses(infos)
+
+
+def ensure_public_url_sync(url: str) -> None:
+    """ensure_public_url for synchronous callers (embedding runs in worker threads)."""
+    if settings.allow_private_provider_urls:
+        return
+    host = _host(url)
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise ProviderError(f"Could not resolve {host}.") from None
+    _check_addresses(infos)

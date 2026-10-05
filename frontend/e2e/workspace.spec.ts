@@ -67,6 +67,28 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
     await expect(page).toHaveURL(/\/chat\?c=\d+/);
   });
 
+  await test.step("switch embeddings to the provider, re-index, and still get the cited answer", async () => {
+    await page.goto("/settings");
+    await page.getByLabel("Embedding provider").selectOption("custom");
+    await page.getByLabel("Embedding model").fill("stub-embed");
+    await page.getByRole("button", { name: "Save embedding model" }).click();
+    await expect(page.getByText(/Saved\. New documents are embedded with .*stub-embed/)).toBeVisible();
+    await page.getByRole("button", { name: "Re-index them" }).click();
+    await expect(page.getByText("Re-indexing 2 documents.")).toBeVisible();
+    await expect(page.getByText(/OpenAI-compatible \(self-hosted\) · stub-embed: 2/)).toBeVisible({ timeout: 30_000 });
+
+    await page.goto("/documents");
+    await page.getByRole("link", { name: "roboarm-x2-faq" }).click();
+    await expect(page.getByText(/Embedded with custom · stub-embed/)).toBeVisible();
+
+    await page.goto("/chat");
+    await page.getByLabel("Model", { exact: true }).fill("stub-model");
+    await page.getByLabel("Message").fill("What does error code E-4711 mean?");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".prose-answer").last()).toContainText("E-4711", { timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Evaluate answer" })).toBeVisible();
+  });
+
   await test.step("evaluate the answer", async () => {
     await page.getByRole("button", { name: "Evaluate answer" }).click();
     await expect(page.getByText("Faithfulness")).toBeVisible({ timeout: 30_000 });

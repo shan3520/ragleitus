@@ -115,7 +115,8 @@ async def send_message(
     """Ask a question about your documents.
 
     With `stream: true` (the default) the response is server-sent events:
-    `sources` (the passages given to the model), then `token` events with
+    `sources` (the passages given to the model, and `warnings` such as
+    documents that could only be searched by keyword), then `token` events with
     answer text, then `citations` and finally `done` with usage, cost and
     latency. A provider failure ends the stream with an `error` event.
     With `stream: false` the same information comes back as one JSON object.
@@ -141,10 +142,10 @@ async def send_message(
             result = await chat_service.run_turn(turn)
         except chat_service.ChatError as exc:
             _raise(exc)
-        return {"sources": sources, **result}
+        return {"sources": sources, "warnings": turn.warnings, **result}
 
     async def events():
-        yield _sse("sources", {"sources": sources})
+        yield _sse("sources", {"sources": sources, "warnings": turn.warnings})
         async for name, data in chat_service.stream_turn(turn):
             yield _sse(name, data)
 

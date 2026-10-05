@@ -50,3 +50,18 @@ def _isolate_app_state():
     login_rate_limiter.reset()
     yield
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def vector_stores(monkeypatch):
+    """A fresh in-memory Qdrant behind every collection (vector_store.store_for),
+    so vectors from one test can't turn up in another."""
+    from qdrant_client import QdrantClient
+
+    from app.services import vector_store
+
+    client = QdrantClient(location=":memory:")
+    monkeypatch.setattr(vector_store, "_client", lambda: client)
+    vector_store.store_for.cache_clear()
+    yield client
+    vector_store.store_for.cache_clear()

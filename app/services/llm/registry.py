@@ -27,6 +27,16 @@ class ProviderSpec:
     stream_usage_option: bool = True
     # Whether the user supplies the base URL (self-hosted servers).
     requires_base_url: bool = False
+    # Suggested model for embedding documents through this provider. None:
+    # the provider offers no embeddings API. "": supported, but the user must
+    # name the model (self-hosted servers).
+    embedding_model: str | None = None
+    # NVIDIA's retrieval embedders need to know whether they embed a passage or a query.
+    embedding_input_type: bool = False
+
+    @property
+    def supports_embeddings(self) -> bool:
+        return self.embedding_model is not None
 
 
 PROVIDERS: dict[str, ProviderSpec] = {
@@ -35,17 +45,27 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ProviderSpec(
             "openai", "OpenAI", "openai_compatible", "gpt-4o-mini",
             base_url="https://api.openai.com/v1", key_pattern=re.compile(r"^sk-[A-Za-z0-9_\-]{8,}$"),
+            embedding_model="text-embedding-3-small",
         ),
         ProviderSpec("anthropic", "Anthropic", "anthropic", "claude-opus-5-5", key_pattern=re.compile(r"^sk-ant-[A-Za-z0-9_\-]{8,}$")),
-        ProviderSpec("gemini", "Google Gemini", "gemini", "gemini-2.5-flash", base_url=GEMINI_BASE_URL, key_pattern=re.compile(r"^AIza[0-9A-Za-z\-_]{20,}$")),
+        ProviderSpec("gemini", "Google Gemini", "gemini", "gemini-2.5-flash", base_url=GEMINI_BASE_URL, key_pattern=re.compile(r"^AIza[0-9A-Za-z\-_]{20,}$"), embedding_model="gemini-embedding-001"),
         ProviderSpec("groq", "Groq", "openai_compatible", "llama-3.3-70b-versatile", base_url="https://api.groq.com/openai/v1"),
         ProviderSpec("openrouter", "OpenRouter", "openai_compatible", "openai/gpt-4o-mini", base_url="https://openrouter.ai/api/v1"),
-        ProviderSpec("nvidia", "NVIDIA NIM", "openai_compatible", "meta/llama-3.1-70b-instruct", base_url="https://integrate.api.nvidia.com/v1"),
-        ProviderSpec("together", "Together AI", "openai_compatible", "meta-llama/Llama-3.3-70B-Instruct-Turbo", base_url="https://api.together.xyz/v1"),
-        ProviderSpec("mistral", "Mistral AI", "openai_compatible", "mistral-small-latest", base_url="https://api.mistral.ai/v1", stream_usage_option=False),
+        ProviderSpec(
+            "nvidia", "NVIDIA NIM", "openai_compatible", "meta/llama-3.1-70b-instruct", base_url="https://integrate.api.nvidia.com/v1",
+            embedding_model="nvidia/nv-embedqa-e5-v5", embedding_input_type=True,
+        ),
+        ProviderSpec(
+            "together", "Together AI", "openai_compatible", "meta-llama/Llama-3.3-70B-Instruct-Turbo", base_url="https://api.together.xyz/v1",
+            embedding_model="BAAI/bge-base-en-v1.5",
+        ),
+        ProviderSpec(
+            "mistral", "Mistral AI", "openai_compatible", "mistral-small-latest", base_url="https://api.mistral.ai/v1",
+            stream_usage_option=False, embedding_model="mistral-embed",
+        ),
         ProviderSpec(
             "custom", "OpenAI-compatible (self-hosted)", "openai_compatible", "",
-            stream_usage_option=False, requires_base_url=True,
+            stream_usage_option=False, requires_base_url=True, embedding_model="",
         ),
     ]
 }

@@ -4,7 +4,7 @@ from sqlalchemy import func
 from app.models.group import Group
 from app.models.document import Document
 from app.services.audit_service import log_audit_event
-from app.services.vector_store import get_vector_store
+from app.services import embedding_service
 
 
 def get_user_group(session: Session, user_id: int, group_id: int) -> Group | None:
@@ -41,8 +41,9 @@ def delete_group(session: Session, user_id: int, group_id: int, hard_delete: boo
     if hard_delete:
         documents = session.query(Document).filter(Document.group_id == group_id, Document.user_id == user_id)
         document_ids = [doc_id for (doc_id,) in documents.with_entities(Document.id)]
+        locations = embedding_service.vector_locations(session, user_id, document_ids)
         documents.delete(synchronize_session=False)
-        get_vector_store().delete_documents(user_id, document_ids)
+        embedding_service.delete_vectors(user_id, locations)
 
     session.delete(group)
     session.flush()

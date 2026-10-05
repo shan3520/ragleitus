@@ -89,7 +89,7 @@ describe("toChatItems", () => {
     completion_tokens: null, latency_ms: null, finish_reason: null, created_at: "",
   });
   const evaluation = (id: number, message_id: number, faithfulness: number) => ({
-    id, message_id, conversation_id: 1, judge_provider: "openai", judge_model: "m", faithfulness,
+    id, message_id, conversation_id: 1, evaluator: "builtin", judge_provider: "openai", judge_model: "m", faithfulness,
     answer_relevancy: 1, context_precision: 1, context_recall: null, hallucination: 1 - faithfulness,
     rationale: null, reference_answer: null, rouge_l: null, context_overlap: null, created_at: "",
   });

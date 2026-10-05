@@ -126,3 +126,57 @@ def test_history_gives_conversation_ids_without_loading_answer_text(env):
     assert items[0].conversation_id == conversation_id
     unloaded = inspect(items[0].message).unloaded
     assert {"content", "context"} <= unloaded
+
+
+@pytest.mark.parametrize("evaluator", ["ragas", "deepeval"])
+def test_an_answer_can_be_scored_by_ragas_or_deepeval(env, evaluator):
+    from app.services import evaluators
+    from tests.fakes import SchemaJudgeProvider
+
+    if not evaluators.EVALUATORS[evaluator].installed():
+        pytest.skip(f"{evaluator} is not installed")
+    session, user_id, _, answer = env
+    provider = SchemaJudgeProvider()
+
+    evaluation = asyncio.run(rag_evaluation.evaluate_message(
+        session, user_id, answer.id, reference="25 days.", factory=FakeFactory(provider), evaluator=evaluator,
+    ))
+    session.commit()
+
+    assert evaluation.evaluator == evaluator
+    assert (evaluation.judge_provider, evaluation.judge_model) == ("openai", "gpt-4o-mini")
+    assert evaluation.faithfulness == 1.0 and evaluation.context_recall == 1.0
+    assert evaluation.hallucination == 0.0
+    assert evaluation.rouge_l is not None
+    # Every call the library made is in telemetry, as the user's evaluation calls.
+    calls = session.query(TelemetryEvent).filter_by(operation="evaluation").count()
+    assert calls == len(provider.calls) >= 5
+
+
+def test_an_unknown_or_missing_evaluator_is_refused_before_any_call(env, monkeypatch):
+    from app.services import evaluators
+
+    session, user_id, _, answer = env
+    provider = FakeProvider(reply=JUDGE_JSON)
+    with pytest.raises(rag_evaluation.EvaluationError, match="Unknown evaluator"):
+        asyncio.run(rag_evaluation.evaluate_message(session, user_id, answer.id, factory=FakeFactory(provider), evaluator="magic"))
+    monkeypatch.setattr(evaluators.deepeval_evaluator, "installed", lambda: False)
+    with pytest.raises(rag_evaluation.EvaluationError, match="DeepEval is not installed"):
+        asyncio.run(rag_evaluation.evaluate_message(session, user_id, answer.id, factory=FakeFactory(provider), evaluator="deepeval"))
+    assert provider.calls == []
+
+
+def test_a_library_failure_is_reported_as_a_judge_error(env, monkeypatch):
+    from app.services.evaluators import builtin
+
+    session, user_id, _, answer = env
+
+    async def broken(item, judge, embedder=None):
+        await judge.complete([])
+        raise KeyError("verdicts")
+
+    monkeypatch.setattr(builtin, "evaluate", broken)
+    with pytest.raises(rag_evaluation.JudgeError, match="Built-in judge could not score the answer"):
+        asyncio.run(rag_evaluation.evaluate_message(session, user_id, answer.id, factory=FakeFactory(FakeProvider(reply="x"))))
+    # The call it made is still recorded.
+    assert session.query(TelemetryEvent).filter_by(operation="evaluation").count() == 1

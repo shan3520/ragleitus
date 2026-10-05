@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import settings
 from app.models.document import Document
 from app.models.experiment import Experiment, ExperimentResult, ExperimentVariant
+from app.services import evaluators
 from app.services.chat_service import ChatError
 from app.services.evaluation_scoring import ScoreSummary, compare_experiments
 from app.services.llm import UnknownProviderError, get_spec
@@ -144,6 +145,7 @@ def create_experiment(
     evaluate: bool = True,
     judge_provider: str | None = None,
     judge_model: str | None = None,
+    evaluator: str | None = None,
 ) -> Experiment:
     name = (name or "").strip()
     if not name:
@@ -166,8 +168,13 @@ def create_experiment(
         judge_spec = _check_provider(session, user_id, judge_provider, "Judge")
         if not (judge_model or "").strip() and not judge_spec.default_model:
             raise ExperimentError(f"Judge: choose a model for {judge_spec.label}.")
+    try:
+        evaluator = evaluators.get(evaluator).NAME
+    except evaluators.EvaluationError as exc:
+        raise ExperimentError(exc.message) from None
     experiment = Experiment(
         user_id=user_id,
+        evaluator=evaluator,
         name=name[:255],
         status="draft",
         cases=_clean_cases(cases),
@@ -248,6 +255,7 @@ def experiment_dict(experiment: Experiment, done: int, with_cases: bool = False)
         "variants": [variant_dict(v) for v in experiment.variants],
         "document_ids": experiment.document_ids,
         "evaluate": experiment.evaluate,
+        "evaluator": experiment.evaluator,
         "judge_provider": experiment.judge_provider,
         "judge_model": experiment.judge_model,
         "progress": {"done": done, "total": total},
@@ -296,6 +304,11 @@ def start_run(session: Session, user_id: int, experiment_id: int) -> Experiment:
             )
     if experiment.judge_provider:
         _check_provider(session, user_id, experiment.judge_provider, "Judge")
+    if experiment.evaluate:
+        try:
+            evaluators.get(experiment.evaluator)
+        except evaluators.EvaluationError as exc:
+            raise ExperimentError(exc.message) from None
     session.query(ExperimentResult).filter(ExperimentResult.experiment_id == experiment.id).delete(synchronize_session=False)
     experiment.status = "queued"
     experiment.error = None

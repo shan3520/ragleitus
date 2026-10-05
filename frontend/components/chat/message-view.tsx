@@ -6,6 +6,7 @@ import { AlertTriangle, FileText, FlaskConical } from "lucide-react";
 
 import { api, type Citation, type Evaluation, type Source } from "@/lib/api";
 import { citationLabel, citationTarget } from "@/lib/citations";
+import { DEFAULT_EVALUATOR, useEvaluators } from "@/lib/evaluators";
 import { cn, formatCost, formatMs, formatNumber } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { EvaluationScores } from "./evaluation-scores";
@@ -69,12 +70,14 @@ function EvaluateButton({ messageId, saved }: { messageId: number; saved?: Evalu
   const [evaluation, setEvaluation] = useState<Evaluation | null>(saved ?? null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const evaluators = useEvaluators();
+  const [evaluator, setEvaluator] = useState(DEFAULT_EVALUATOR);
 
   async function run() {
     setBusy(true);
     setError(null);
     try {
-      setEvaluation(await api.evaluate({ message_id: messageId }));
+      setEvaluation(await api.evaluate({ message_id: messageId, evaluator }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -95,6 +98,21 @@ function EvaluateButton({ messageId, saved }: { messageId: number; saved?: Evalu
         <FlaskConical />
         {busy ? "Evaluating…" : "Evaluate answer"}
       </Button>
+      {evaluators.length > 1 && (
+        <select
+          aria-label="Evaluator"
+          className="h-7 rounded-md border bg-background px-2 text-xs text-muted-foreground"
+          value={evaluator}
+          onChange={(e) => setEvaluator(e.target.value)}
+          disabled={busy}
+        >
+          {evaluators.map((e) => (
+            <option key={e.name} value={e.name} title={e.description}>
+              {e.label}
+            </option>
+          ))}
+        </select>
+      )}
       {error && <span className="text-xs text-destructive">{error}</span>}
     </div>
   );

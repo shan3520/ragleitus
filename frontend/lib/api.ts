@@ -178,6 +178,7 @@ export interface Experiment {
   variants: ExperimentVariant[];
   document_ids: number[] | null;
   evaluate: boolean;
+  evaluator: string;
   judge_provider: string | null;
   judge_model: string | null;
   progress: { done: number; total: number };
@@ -310,18 +311,29 @@ export interface Evaluation {
   id: number;
   message_id: number;
   conversation_id: number | null;
+  /** builtin | ragas | deepeval */
+  evaluator: string;
   judge_provider: string;
   judge_model: string;
-  faithfulness: number;
-  answer_relevancy: number;
-  context_precision: number;
+  /** null when the evaluator could not score this metric. */
+  faithfulness: number | null;
+  answer_relevancy: number | null;
+  context_precision: number | null;
   context_recall: number | null;
-  hallucination: number;
+  hallucination: number | null;
   rationale: string | null;
   reference_answer: string | null;
   rouge_l: number | null;
   context_overlap: number | null;
   created_at: string;
+}
+
+export interface EvaluatorInfo {
+  name: string;
+  label: string;
+  description: string;
+  /** Installed on this server. */
+  available: boolean;
 }
 
 export interface EvaluationHistory {
@@ -541,6 +553,7 @@ export const api = {
     cases: ExperimentCase[];
     variants: ExperimentVariantInput[];
     evaluate?: boolean;
+    evaluator?: string;
     run?: boolean;
   }) => request<Experiment>("/api/experiments", { method: "POST", body: json(body) }),
   runExperiment: (id: number) => request<Experiment>(`/api/experiments/${id}/run`, { method: "POST" }),
@@ -559,7 +572,8 @@ export const api = {
   telemetryEvents: (limit = 50, offset = 0) =>
     request<{ items: TelemetryEvent[]; total: number }>(`/api/telemetry/events?limit=${limit}&offset=${offset}`),
 
-  evaluate: (body: { message_id: number; reference_answer?: string; provider?: string; model?: string }) =>
+  evaluators: () => request<EvaluatorInfo[]>("/api/evaluators"),
+  evaluate: (body: { message_id: number; reference_answer?: string; provider?: string; model?: string; evaluator?: string }) =>
     request<Evaluation>("/api/evaluations", { method: "POST", body: json(body) }),
   evaluations: (params: { conversation_id?: number; limit?: number; offset?: number } = {}) => {
     const query = new URLSearchParams();

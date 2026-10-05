@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, get_provider_factory
 from app.models.user import User
 from app.db.database import get_db
-from app.services import experiment_service, rag_evaluation
+from app.services import evaluators, experiment_service, rag_evaluation
 from app.services.chat_service import ChatError
 from app.services.llm import ProviderFactory
 
@@ -41,6 +41,7 @@ class EvaluationRequest(BaseModel):
     reference_answer: str | None = Field(default=None, max_length=20_000)
     provider: str | None = Field(default=None, description="Judge provider; defaults to the one that wrote the answer")
     model: str | None = None
+    evaluator: str = Field(default="builtin", description="builtin, ragas or deepeval (see GET /api/evaluators)")
 
 
 class EvaluationOut(BaseModel):
@@ -49,13 +50,14 @@ class EvaluationOut(BaseModel):
     id: int
     message_id: int
     conversation_id: int | None
+    evaluator: str
     judge_provider: str
     judge_model: str
-    faithfulness: float
-    answer_relevancy: float
-    context_precision: float
+    faithfulness: float | None
+    answer_relevancy: float | None
+    context_precision: float | None
     context_recall: float | None
-    hallucination: float
+    hallucination: float | None
     rationale: str | None
     reference_answer: str | None
     rouge_l: float | None
@@ -76,17 +78,24 @@ async def evaluate_answer(
     session: Session = Depends(get_db),
     factory: ProviderFactory = Depends(get_provider_factory),
 ):
-    """Score an assistant answer with an LLM judge (faithfulness, answer relevancy,
-    context precision, and context recall when a reference answer is given)."""
+    """Score an assistant answer (faithfulness, answer relevancy, context
+    precision, and context recall when a reference answer is given) with the
+    built-in LLM judge, Ragas or DeepEval, judged by your own provider."""
     try:
         evaluation = await rag_evaluation.evaluate_message(
             session, user.id, payload.message_id, payload.reference_answer,
-            provider=payload.provider, model=payload.model, factory=factory,
+            provider=payload.provider, model=payload.model, factory=factory, evaluator=payload.evaluator,
         )
     except ChatError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     session.commit()
     return evaluation
+
+
+@router.get("/api/evaluators")
+def list_evaluators(user: User = Depends(get_current_user)):
+    """The ways answers can be scored, and whether each is installed on this server."""
+    return evaluators.available()
 
 
 @router.get("/api/evaluations", response_model=EvaluationHistory)

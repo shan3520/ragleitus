@@ -343,3 +343,20 @@ def test_a_run_that_cannot_be_queued_fails_so_it_can_be_retried(env, monkeypatch
     failed = session.get(Experiment, experiment.id)
     assert (failed.status, failed.error) == ("failed", "Could not queue the run; try again.")
     experiment_service.start_run(session, user.id, experiment.id)  # not busy
+
+
+def test_an_experiment_can_be_scored_by_another_evaluator(env):
+    from app.services import evaluators
+    from tests.fakes import SchemaJudgeProvider
+
+    if not evaluators.ragas_evaluator.installed():
+        pytest.skip("ragas is not installed")
+    session, user, run = env
+    experiment = _create(session, user, evaluator="ragas")
+    run(experiment.id, provider=SchemaJudgeProvider(prefix="Answer:"))
+    results = session.query(ExperimentResult).all()
+    assert len(results) == 4 and all(r.error is None for r in results)
+    assert all(r.faithfulness == 1.0 for r in results)
+    assert experiment_service.describe(session, session.get(Experiment, experiment.id))["evaluator"] == "ragas"
+    with pytest.raises(ExperimentError, match="Unknown evaluator"):
+        experiment_service.create_experiment(session, user.id, "x", CASES, [{"provider": "openai"}], evaluator="magic")

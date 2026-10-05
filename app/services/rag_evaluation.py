@@ -1,6 +1,6 @@
-"""Evaluating chat answers with an LLM judge (LLM-as-a-judge).
+"""Evaluating chat answers: an evaluator's scores, judged by the user's model.
 
-For one assistant message the judge sees the question, the passages the
+For one assistant message the evaluator sees the question, the passages the
 answer was given, the answer, and optionally a reference answer, and scores:
 
 - faithfulness: share of the answer's claims supported by the passages
@@ -9,17 +9,16 @@ answer was given, the answer, and optionally a reference answer, and scores:
 - context_recall: share of the reference answer's facts found in the passages
   (only with a reference answer)
 
-Hallucination is reported as 1 - faithfulness. Two lexical baselines that
-need no model are stored alongside for comparison. The judge runs on the
-user's own provider key and is recorded in telemetry like any other call.
+The evaluator is RAGForge's own LLM judge (one call), Ragas or DeepEval (see
+app.services.evaluators); all run on the user's own provider key, and every
+call they make is recorded in telemetry. Hallucination is 1 - faithfulness
+(DeepEval measures it directly). Two lexical baselines that need no model
+are stored alongside for comparison.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-import re
-import time
 from dataclasses import dataclass
 
 from sqlalchemy import func
@@ -27,85 +26,27 @@ from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.models.answer_evaluation import AnswerEvaluation
 from app.models.conversation import Conversation, Message
-from app.services import telemetry
-from app.services.chat_service import ChatError, ProviderChoiceError
+from app.services import embedding_service, evaluators, telemetry
+from app.services.chat_service import ProviderChoiceError
+from app.services.embeddings import Embedder
+from app.services.evaluators import EvaluationError, EvaluationInput, JudgeError, JudgeModel, Scores
+from app.services.evaluators.base import JUDGE_MAX_TOKENS
+from app.services.evaluators.builtin import (  # noqa: F401  (part of this module's interface)
+    JUDGE_INSTRUCTIONS,
+    JUDGE_SYSTEM,
+    RECALL_WITH_REFERENCE,
+    RECALL_WITHOUT_REFERENCE,
+    build_judge_prompt,
+    parse_judge_output,
+)
 from app.services.jaccard_scoring import score_jaccard
-from app.services.llm import ChatMessage, ProviderError, ProviderFactory, complete, create_provider, get_spec
+from app.services.llm import ProviderFactory, create_provider, get_spec
 from app.services.provider_key import MissingProviderKeyError, create_user_provider
 from app.services.rouge_scoring import score_rouge_l
-
-JUDGE_MAX_TOKENS = 4000
-JUDGE_SYSTEM = (
-    "You are an impartial evaluator of answers produced by a retrieval-augmented assistant. "
-    "Judge strictly from the material given. Reply with a single JSON object and nothing else."
-)
-JUDGE_INSTRUCTIONS = """Score the ANSWER on a scale from 0.0 to 1.0 for each metric:
-
-- "faithfulness": the fraction of factual claims in the ANSWER that are supported by the CONTEXT passages. An answer that correctly says the context does not contain the information is fully faithful.
-- "answer_relevancy": how directly and completely the ANSWER addresses the QUESTION.
-- "context_precision": the fraction of CONTEXT passages that are relevant to the QUESTION.
-- "context_recall": {recall_rule}
-
-Return exactly: {{"faithfulness": number, "answer_relevancy": number, "context_precision": number, "context_recall": number or null, "rationale": "one or two sentences"}}"""
-RECALL_WITH_REFERENCE = "the fraction of facts in the REFERENCE ANSWER that can be found in the CONTEXT passages."
-RECALL_WITHOUT_REFERENCE = "null (no reference answer was given)."
-
-
-class EvaluationError(ChatError):
-    status_code = 400
 
 
 class MessageNotFoundError(EvaluationError):
     status_code = 404
-
-
-class JudgeError(EvaluationError):
-    status_code = 502
-
-
-@dataclass(frozen=True)
-class JudgeScores:
-    faithfulness: float
-    answer_relevancy: float
-    context_precision: float
-    context_recall: float | None
-    rationale: str | None
-
-
-def _clamp(value) -> float:
-    return max(0.0, min(1.0, float(value)))
-
-
-def parse_judge_output(text: str, has_reference: bool) -> JudgeScores:
-    """Read the judge's JSON, tolerating code fences or text around it."""
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        raise JudgeError("The judge model did not return JSON.")
-    try:
-        data = json.loads(match.group(0))
-        recall = data.get("context_recall")
-        return JudgeScores(
-            faithfulness=_clamp(data["faithfulness"]),
-            answer_relevancy=_clamp(data["answer_relevancy"]),
-            context_precision=_clamp(data["context_precision"]),
-            context_recall=_clamp(recall) if has_reference and recall is not None else None,
-            rationale=str(data.get("rationale") or "")[:2000] or None,
-        )
-    except (ValueError, KeyError, TypeError) as exc:
-        raise JudgeError(f"The judge model returned malformed scores ({type(exc).__name__}).") from None
-
-
-def build_judge_prompt(question: str, context: list[dict], answer: str, reference: str | None) -> list[ChatMessage]:
-    passages = "\n\n".join(f"[{p['number']}] {p.get('content', p.get('snippet', ''))}" for p in context) or "(no passages)"
-    parts = [
-        JUDGE_INSTRUCTIONS.format(recall_rule=RECALL_WITH_REFERENCE if reference else RECALL_WITHOUT_REFERENCE),
-        f"QUESTION:\n{question}",
-        f"CONTEXT:\n{passages}",
-        f"ANSWER:\n{answer}",
-    ]
-    if reference:
-        parts.append(f"REFERENCE ANSWER:\n{reference}")
-    return [ChatMessage("system", JUDGE_SYSTEM), ChatMessage("user", "\n\n".join(parts))]
 
 
 def _load_answer(session: Session, user_id: int, message_id: int) -> tuple[Message, str]:
@@ -129,70 +70,95 @@ def _load_answer(session: Session, user_id: int, message_id: int) -> tuple[Messa
     return message, question or ""
 
 
+def resolve_judge(session: Session, user_id: int, provider: str, model: str | None, factory: ProviderFactory) -> JudgeModel:
+    """The user's judge: their provider (with their key) and the model, or the provider's default."""
+    try:
+        spec = get_spec(provider)
+    except ValueError:
+        raise ProviderChoiceError(f"Unknown provider '{provider}'")
+    model = model or spec.default_model
+    if not model:
+        raise ProviderChoiceError(f"Provider '{provider}' has no default model; pass a model name.")
+    try:
+        adapter = create_user_provider(session, user_id, provider, factory)
+    except MissingProviderKeyError:
+        raise ProviderChoiceError(f"No API key stored for provider '{provider}'.")
+    return JudgeModel(provider, adapter, model, JUDGE_MAX_TOKENS)
+
+
+def user_embedder(session: Session, user_id: int) -> Embedder:
+    """The embedding model Ragas's answer relevancy uses: the user's own choice."""
+    try:
+        return embedding_service.build_embedder(session, user_id, embedding_service.get_choice(session, user_id))
+    except embedding_service.EmbeddingUnavailable as exc:
+        raise EvaluationError(str(exc)) from None
+
+
+def record_judge_calls(session: Session, user_id: int, judge: JudgeModel, conversation_id=None, message_id=None) -> None:
+    """Telemetry for every call the evaluator made through the judge."""
+    for call in judge.calls:
+        telemetry.record_llm_call(
+            session, user_id=user_id, operation="evaluation", provider=judge.provider_name, model=call.model,
+            latency_ms=call.latency_ms, usage=call.usage, prompt_text=call.prompt_text,
+            completion_text=call.completion_text, error=call.error,
+            conversation_id=conversation_id, message_id=message_id,
+        )
+    judge.calls.clear()
+
+
+async def score(item: EvaluationInput, judge: JudgeModel, evaluator: str | None, embedder: Embedder | None) -> Scores:
+    """Run an evaluator; an evaluator library's own failure is reported as a judge error."""
+    module = evaluators.get(evaluator)
+    try:
+        return await module.evaluate(item, judge, embedder)
+    except EvaluationError:
+        raise
+    except Exception as exc:  # the libraries raise their own exception types
+        raise JudgeError(f"{module.LABEL} could not score the answer ({type(exc).__name__}: {str(exc)[:200]}).") from None
+
+
 @dataclass
-class _JudgeCall:
+class _Prepared:
     message: Message
-    judge_provider: str
-    judge_model: str
-    judge: object
-    prompt: list
-    prompt_text: str
-    context: list
+    question: str
+    judge: JudgeModel
+    embedder: Embedder | None
 
 
-def _prepare_judge(session, user_id, message_id, reference, provider, model, factory) -> _JudgeCall:
+def _prepare(session, user_id, message_id, provider, model, factory, evaluator) -> _Prepared:
+    evaluators.get(evaluator)  # unknown or not installed: refuse before any call
     message, question = _load_answer(session, user_id, message_id)
     judge_provider = provider or message.provider
     if not judge_provider:
         raise ProviderChoiceError("Choose a judge provider.")
-    try:
-        spec = get_spec(judge_provider)
-    except ValueError:
-        raise ProviderChoiceError(f"Unknown provider '{judge_provider}'")
-    judge_model = model or (message.model if judge_provider == message.provider else None) or spec.default_model
-    if not judge_model:
-        raise ProviderChoiceError(f"Provider '{judge_provider}' has no default model; pass a model name.")
-    try:
-        judge = create_user_provider(session, user_id, judge_provider, factory)
-    except MissingProviderKeyError:
-        raise ProviderChoiceError(f"No API key stored for provider '{judge_provider}'.")
-
-    context = message.context or []
-    prompt = build_judge_prompt(question, context, message.content, reference)
-    prompt_text = "\n\n".join(m.content for m in prompt)
-    return _JudgeCall(message, judge_provider, judge_model, judge, prompt, prompt_text, context)
+    judge_model = model or (message.model if judge_provider == message.provider else None)
+    judge = resolve_judge(session, user_id, judge_provider, judge_model, factory)
+    embedder = user_embedder(session, user_id) if evaluator == "ragas" else None
+    return _Prepared(message, question, judge, embedder)
 
 
-def _record_judge_failure(session: Session, user_id: int, call: _JudgeCall, latency_ms: float, exc: ProviderError) -> None:
-    telemetry.record_llm_call(
-        session, user_id=user_id, operation="evaluation", provider=call.judge_provider, model=call.judge_model,
-        latency_ms=latency_ms, error=exc, prompt_text=call.prompt_text,
-        conversation_id=call.message.conversation_id, message_id=call.message.id,
-    )
+def _record_failure(session: Session, user_id: int, prepared: _Prepared) -> None:
+    record_judge_calls(session, user_id, prepared.judge, prepared.message.conversation_id, prepared.message.id)
+    embedding_service.record_calls(session, user_id, prepared.embedder)
     session.commit()
 
 
-def _store_evaluation(session: Session, user_id: int, call: _JudgeCall, result, latency_ms: float, reference: str | None) -> AnswerEvaluation:
-    message = call.message
-    telemetry.record_llm_call(
-        session, user_id=user_id, operation="evaluation", provider=call.judge_provider, model=result.model or call.judge_model,
-        latency_ms=latency_ms, usage=result.usage, prompt_text=call.prompt_text,
-        completion_text=result.text, conversation_id=message.conversation_id, message_id=message.id,
-    )
-    session.commit()
-    scores = parse_judge_output(result.text, has_reference=bool(reference))
-
-    context_text = " ".join(p.get("content", "") for p in call.context)
+def _store_evaluation(session, user_id, prepared: _Prepared, scores: Scores, reference, evaluator) -> AnswerEvaluation:
+    message = prepared.message
+    record_judge_calls(session, user_id, prepared.judge, message.conversation_id, message.id)
+    embedding_service.record_calls(session, user_id, prepared.embedder)
+    context_text = " ".join(p.get("content", "") for p in message.context or [])
     evaluation = AnswerEvaluation(
         user_id=user_id,
         message_id=message.id,
-        judge_provider=call.judge_provider,
-        judge_model=call.judge_model,
+        evaluator=evaluators.get(evaluator).NAME,
+        judge_provider=prepared.judge.provider_name,
+        judge_model=prepared.judge.model,
         faithfulness=scores.faithfulness,
         answer_relevancy=scores.answer_relevancy,
         context_precision=scores.context_precision,
-        context_recall=scores.context_recall,
-        hallucination=round(1.0 - scores.faithfulness, 4),
+        context_recall=scores.context_recall if reference else None,
+        hallucination=scores.hallucination_score(),
         rationale=scores.rationale,
         reference_answer=reference,
         rouge_l=score_rouge_l(message.content, reference) if reference else None,
@@ -211,18 +177,24 @@ async def evaluate_message(
     provider: str | None = None,
     model: str | None = None,
     factory: ProviderFactory = create_provider,
+    evaluator: str | None = None,
 ) -> AnswerEvaluation:
     # Database work runs in a worker thread (one step at a time, so the session
-    # is never used concurrently); only the provider call runs on the event loop.
-    call = await asyncio.to_thread(_prepare_judge, session, user_id, message_id, reference, provider, model, factory)
-    started = time.perf_counter()
+    # is never used concurrently); only the provider calls run on the event loop.
+    prepared = await asyncio.to_thread(_prepare, session, user_id, message_id, provider, model, factory, evaluator)
+    message = prepared.message
+    item = EvaluationInput(
+        question=prepared.question,
+        answer=message.content,
+        contexts=[p.get("content", "") for p in message.context or []],
+        reference=reference,
+    )
     try:
-        result = await complete(call.judge, call.prompt, call.judge_model, JUDGE_MAX_TOKENS)
-    except ProviderError as exc:
-        await asyncio.to_thread(_record_judge_failure, session, user_id, call, (time.perf_counter() - started) * 1000, exc)
-        raise JudgeError(exc.message) from None
-    latency_ms = (time.perf_counter() - started) * 1000
-    return await asyncio.to_thread(_store_evaluation, session, user_id, call, result, latency_ms, reference)
+        scores = await score(item, prepared.judge, evaluator, prepared.embedder)
+    except EvaluationError:
+        await asyncio.to_thread(_record_failure, session, user_id, prepared)
+        raise
+    return await asyncio.to_thread(_store_evaluation, session, user_id, prepared, scores, reference, evaluator)
 
 
 METRICS = ("faithfulness", "answer_relevancy", "context_precision", "context_recall", "hallucination")

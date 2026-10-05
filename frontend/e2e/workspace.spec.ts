@@ -98,6 +98,21 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
     await expect(page.getByRole("button", { name: "Evaluate answer" })).toHaveCount(0);
   });
 
+  await test.step("score the same answer with DeepEval through the same provider", async () => {
+    // A new answer to evaluate, in a fresh conversation.
+    await page.goto("/chat");
+    await page.getByLabel("Model", { exact: true }).fill("stub-model");
+    await page.getByLabel("Message").fill("What does error code E-4711 mean?");
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Evaluate answer" })).toBeVisible({ timeout: 30_000 });
+    await page.getByLabel("Evaluator").selectOption({ label: "DeepEval" });
+    await page.getByRole("button", { name: "Evaluate answer" }).click();
+    await expect(page.getByText(/DeepEval · judged by custom \/ stub-model/)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("Faithfulness", { exact: true })).toBeVisible();
+    // DeepEval's reasons come with the scores.
+    await expect(page.getByText(/^Faithfulness: /)).toBeVisible();
+  });
+
   await test.step("a citation opens the cited passage", async () => {
     await page.locator(".prose-answer a").first().click();
     await expect(page).toHaveURL(/\/documents\/\d+#chunk-\d+$/);

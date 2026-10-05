@@ -55,6 +55,7 @@ METRICS = {
     "cost_usd": False,
 }
 ACTIVE = ("queued", "running")
+BUILT_IN_PROMPT = "Built-in prompt"
 
 
 class ExperimentError(ChatError):
@@ -126,7 +127,7 @@ def _variant(session: Session, user_id: int, position: int, raw: dict) -> Experi
             raise ExperimentError(f"{label}: prompt version not found.") from None
         prompt_label = f"{version.prompt.name} v{version.version}"
     else:
-        version_id, prompt_label = None, "Built-in prompt"
+        version_id, prompt_label = None, BUILT_IN_PROMPT
     return ExperimentVariant(
         position=position, label=label, prompt_version_id=version_id, prompt_label=prompt_label[:300],
         provider=spec.name, model=model[:255], retrieval=retrieval, top_k=top_k,
@@ -162,7 +163,9 @@ def create_experiment(
             raise ExperimentError("Some of the chosen documents were not found.")
         document_ids = sorted(owned)
     if judge_provider:
-        _check_provider(session, user_id, judge_provider, "Judge")
+        judge_spec = _check_provider(session, user_id, judge_provider, "Judge")
+        if not (judge_model or "").strip() and not judge_spec.default_model:
+            raise ExperimentError(f"Judge: choose a model for {judge_spec.label}.")
     experiment = Experiment(
         user_id=user_id,
         name=name[:255],
@@ -286,6 +289,11 @@ def start_run(session: Session, user_id: int, experiment_id: int) -> Experiment:
         raise ExperimentBusyError("The experiment is already running.")
     for variant in experiment.variants:
         _check_provider(session, user_id, variant.provider, variant.label)
+        if variant.prompt_version_id is None and variant.prompt_label != BUILT_IN_PROMPT:
+            # Running it with the built-in prompt instead would mislabel the results.
+            raise ExperimentError(
+                f"{variant.label}: its prompt ({variant.prompt_label}) has been deleted. Create a new experiment."
+            )
     if experiment.judge_provider:
         _check_provider(session, user_id, experiment.judge_provider, "Judge")
     session.query(ExperimentResult).filter(ExperimentResult.experiment_id == experiment.id).delete(synchronize_session=False)
@@ -312,6 +320,7 @@ def schedule_run(experiment_id: int, background_tasks: BackgroundTasks | None = 
             run_experiment_task.delay(experiment_id)
         except Exception:
             logger.exception("Could not queue the experiment", extra={"experiment_id": experiment_id})
+            _mark_unqueued(experiment_id)
         return
     from app.services.experiment_runner import run_experiment
 
@@ -320,6 +329,23 @@ def schedule_run(experiment_id: int, background_tasks: BackgroundTasks | None = 
         background_tasks.add_task(run_experiment, experiment_id, **kwargs)
     else:
         threading.Thread(target=run_experiment, args=(experiment_id,), kwargs=kwargs, name="experiment", daemon=True).start()
+
+
+def _mark_unqueued(experiment_id: int) -> None:
+    """The run never reached the queue: fail it, so it can be started again now."""
+    from app.db.database import SessionLocal
+
+    session = SessionLocal()
+    try:
+        session.query(Experiment).filter(Experiment.id == experiment_id, Experiment.status == "queued").update(
+            {Experiment.status: "failed", Experiment.error: "Could not queue the run; try again.", Experiment.finished_at: _now()},
+            synchronize_session=False,
+        )
+        session.commit()
+    except Exception:
+        logger.exception("Could not mark the experiment as failed", extra={"experiment_id": experiment_id})
+    finally:
+        session.close()
 
 
 # ---------------------------------------------------------------- compare and export

@@ -301,3 +301,45 @@ def test_experiments_are_private(env):
         with pytest.raises(experiment_service.ExperimentNotFoundError):
             call()
     assert experiment_service.describe_all(session, stranger.id) == []
+
+
+def test_a_deleted_prompt_or_a_judge_without_a_model_is_refused(env):
+    session, user, run = env
+    experiment = _create(session, user)
+    run(experiment.id)
+    brief = next(v for v in experiment.variants if v.prompt_version_id)
+    prompt_service.delete_prompt(session, user.id, brief.prompt_version.prompt_id)
+    session.commit()
+    session.expire_all()
+
+    with pytest.raises(ExperimentError, match=r"its prompt \(Brief v1\) has been deleted"):
+        experiment_service.start_run(session, user.id, experiment.id)
+    # The results it produced are still labelled with the prompt they used.
+    assert experiment_service.compare(session, user.id, experiment.id)["variants"][1]["prompt_label"] == "Brief v1"
+
+    save_provider_key(session, user.id, "custom", encrypt_key("none"), "https://llm.example.com/v1")
+    session.commit()
+    with pytest.raises(ExperimentError, match="Judge: choose a model for OpenAI-compatible"):
+        experiment_service.create_experiment(
+            session, user.id, "x", CASES, [{"provider": "openai"}], judge_provider="custom"
+        )
+
+
+def test_a_run_that_cannot_be_queued_fails_so_it_can_be_retried(env, monkeypatch):
+    session, user, _ = env
+    experiment = _create(session, user)
+    from app.services import experiment_service as service
+    import app.worker as worker
+
+    def broker_down(*args, **kwargs):
+        raise ConnectionError("Redis is down")
+
+    monkeypatch.setattr(service.settings, "task_queue", "celery")
+    monkeypatch.setattr(worker.run_experiment_task, "delay", broker_down)
+    monkeypatch.setattr("app.db.database.SessionLocal", sessionmaker(bind=session.get_bind()))
+    service.schedule_run(experiment.id)
+
+    session.expire_all()
+    failed = session.get(Experiment, experiment.id)
+    assert (failed.status, failed.error) == ("failed", "Could not queue the run; try again.")
+    experiment_service.start_run(session, user.id, experiment.id)  # not busy

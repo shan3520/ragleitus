@@ -9,8 +9,10 @@ Only chunks of the user's own documents with status "ready" are returned.
 Vector hits are resolved against the database, so a chunk deleted or
 rebuilt since it was indexed is never returned.
 
-BM25 scores the user's chunks in memory on each query, which is fine for
-collections of up to tens of thousands of chunks.
+On PostgreSQL keyword search runs in the database (see keyword_search), and
+only the rows of candidate chunks are loaded, so the cost of a question does
+not grow with the size of the user's collection. SQLite scores keywords in
+memory.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.document import Chunk, Document
-from app.services.bm25 import BM25Index
+from app.services import keyword_search
 from app.services.embeddings import Embedder, get_embedder
 from app.services.rrf import reciprocal_rank_fusion
 from app.services.vector_store import VectorStore, get_vector_store
@@ -59,23 +61,34 @@ def retrieve(
     store = store or get_vector_store()
     candidates = k * CANDIDATE_MULTIPLIER
 
+    # Without a ready document there is nothing to find; don't embed the query
+    # or call the vector store (chat still works without documents).
+    has_documents = session.query(Document.id).filter(Document.user_id == user_id, Document.status == "ready")
+    if document_ids:
+        has_documents = has_documents.filter(Document.id.in_(document_ids))
+    if has_documents.first() is None:
+        return []
+
+    dense_hits = store.search(user_id, embedder.embed_query(query), limit=candidates, document_ids=document_ids)
+    keyword_ranking = keyword_search.search(session, user_id, query, candidates, document_ids)
+
+    # Resolve every candidate against the database at once: this checks that
+    # vector hits still belong to a ready document of the user's, and loads
+    # what the results need.
+    candidate_ids = {hit.chunk_id for hit in dense_hits} | set(keyword_ranking)
+    if not candidate_ids:
+        return []
     rows_query = (
         session.query(Chunk.id, Chunk.content, Chunk.page_number, Document.id, Document.title)
         .join(Document, Chunk.document_id == Document.id)
-        .filter(Document.user_id == user_id, Document.status == "ready")
+        .filter(Chunk.id.in_(candidate_ids), Document.user_id == user_id, Document.status == "ready")
     )
     if document_ids:
         rows_query = rows_query.filter(Document.id.in_(document_ids))
-    rows = rows_query.all()
-    if not rows:
-        return []
-    by_id = {row[0]: row for row in rows}
+    by_id = {row[0]: row for row in rows_query.all()}
 
-    dense_hits = store.search(user_id, embedder.embed_query(query), limit=candidates, document_ids=document_ids)
     dense_ranking = [hit.chunk_id for hit in dense_hits if hit.chunk_id in by_id]
-
-    keyword_index = BM25Index([row[1] for row in rows])
-    keyword_ranking = [rows[i][0] for i, _ in keyword_index.top(query, candidates)]
+    keyword_ranking = [chunk_id for chunk_id in keyword_ranking if chunk_id in by_id]
 
     fused = reciprocal_rank_fusion([[str(c) for c in dense_ranking], [str(c) for c in keyword_ranking]])
     dense_pos = {chunk_id: i + 1 for i, chunk_id in enumerate(dense_ranking)}

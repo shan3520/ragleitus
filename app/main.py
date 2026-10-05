@@ -1,4 +1,5 @@
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +9,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.middleware import RequestIDMiddleware, RateLimitMiddleware
+from app.services import ingestion
 from app.api.health import router as health_router
 from app.api.provider_keys import router as provider_keys_router
 from app.api.auth import router as auth_router
@@ -32,6 +34,20 @@ from app.api.chat import router as chat_router
 logger = logging.getLogger(__name__)
 
 
+def _safely(job) -> None:
+    try:
+        job()
+    except Exception:
+        logger.exception("Could not re-queue stalled documents")
+
+
+def _sweep_stalled(stop: threading.Event) -> None:
+    """Every INDEX_SWEEP_MINUTES, queue again documents whose indexing job was
+    lost (e.g. Redis was unreachable when they were uploaded)."""
+    while not stop.wait(settings.index_sweep_minutes * 60):
+        _safely(ingestion.requeue_stalled)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle.
@@ -43,7 +59,15 @@ async def lifespan(app: FastAPI):
         "Application starting",
         extra={"version": settings.VERSION, "project": settings.PROJECT_NAME},
     )
+    if settings.task_queue == "inline":
+        # In-process indexing jobs die with the process, so every unfinished
+        # document was interrupted by the restart: queue them again.
+        _safely(lambda: ingestion.requeue_stalled(all_unfinished=True))
+    stop = threading.Event()
+    if settings.index_sweep_minutes > 0:
+        threading.Thread(target=_sweep_stalled, args=(stop,), name="index-sweep", daemon=True).start()
     yield
+    stop.set()
     logger.info("Application shutting down")
 
 

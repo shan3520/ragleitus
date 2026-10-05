@@ -15,10 +15,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, Callable
 
+from fastapi import BackgroundTasks
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -131,6 +135,7 @@ def create_document(
         sha256=sha256,
         content=text,
         status="pending",
+        index_updated_at=_now(),
         group_id=group_id,
     )
     session.add(document)
@@ -155,18 +160,39 @@ def _build_chunks(document: Document) -> list[Chunk]:
     return chunks
 
 
-# One lock per document: a second run for the same document (Reindex clicked
-# while the upload is still indexing) waits for the first, instead of both
-# replacing the chunks at once and leaving duplicates or orphaned vectors.
-# Indexing runs in this process, so a process-local lock covers it; a
-# multi-process task queue would need a database lock instead.
-_index_locks: dict[int, threading.Lock] = {}
-_index_locks_guard = threading.Lock()
+class _Superseded(Exception):
+    """Another run claimed the document while this one was working."""
 
 
-def _document_lock(document_id: int) -> threading.Lock:
-    with _index_locks_guard:
-        return _index_locks.setdefault(document_id, threading.Lock())
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _claim(session: Session, document_id: int, token: str) -> Document | None:
+    """Make this run the document's owner; returns the document, or None if there is nothing to do.
+
+    The newest run wins: a run that loses the claim notices before it commits
+    (see index_document) and discards its work, so two runs for one document
+    (Reindex during indexing, a stale job queued again) never leave duplicate
+    chunks or orphaned vectors. A document that is already ready is left
+    alone: that is a duplicate delivery of a job that has finished (Reindex
+    sets the document back to pending first).
+    """
+    claimed = (
+        session.query(Document)
+        .filter(Document.id == document_id, Document.status != "ready")
+        .update(
+            {
+                Document.status: "indexing",
+                Document.error: None,
+                Document.index_token: token,
+                Document.index_updated_at: _now(),
+            },
+            synchronize_session=False,
+        )
+    )
+    session.commit()
+    return session.get(Document, document_id) if claimed else None
 
 
 def index_document(
@@ -178,65 +204,183 @@ def index_document(
     """Chunk, embed and store a document's vectors, replacing any previous index.
 
     Never raises: failures are recorded on the document as status "failed"
-    with the error, because this usually runs after the response is sent.
+    with the error, because this usually runs after the response is sent or
+    in a worker.
+
+    Nothing outside the run's own work is touched until the run has proved it
+    still owns the document: old chunks are replaced inside its transaction,
+    and old vectors are removed only after it has committed.
     """
-    with _document_lock(document_id):
-        _index_document(document_id, session_factory, embedder, store)
-
-
-def _index_document(
-    document_id: int,
-    session_factory: Callable[[], Session],
-    embedder: Embedder | None,
-    store: VectorStore | None,
-) -> None:
     embedder = embedder or get_embedder()
     store = store or get_vector_store()
+    token = str(uuid.uuid4())
     session = session_factory()
+    new_chunk_ids: list[int] = []
     try:
-        document = session.get(Document, document_id)
+        document = _claim(session, document_id, token)
         if document is None:
             return
         user_id = document.user_id
-        document.status = "indexing"
-        document.error = None
-        session.commit()
-
         try:
-            store.delete_documents(user_id, [document.id])
-            session.query(Chunk).filter(Chunk.document_id == document.id).delete(synchronize_session=False)
-            chunks = _build_chunks(document)
+            chunks = _build_chunks(document)  # before any write, to keep the write transaction short
+            old_chunk_ids = [cid for (cid,) in session.query(Chunk.id).filter(Chunk.document_id == document_id)]
+            session.query(Chunk).filter(Chunk.document_id == document_id).delete(synchronize_session=False)
             session.add_all(chunks)
             session.flush()
+            new_chunk_ids = [c.id for c in chunks]
 
             vectors: list[ChunkVector] = []
             for start in range(0, len(chunks), EMBED_BATCH_SIZE):
                 batch = chunks[start:start + EMBED_BATCH_SIZE]
                 embedded = embedder.embed_documents([c.content for c in batch])
                 vectors.extend(ChunkVector(c.id, c.page_number, v) for c, v in zip(batch, embedded))
-            store.upsert_document(user_id, document.id, vectors)
+            store.upsert_document(user_id, document_id, vectors)
 
-            document.status = "ready"
+            # Finish only if this run still owns the document; the row lock this
+            # takes makes a competing claim wait until we have committed.
+            finished = (
+                session.query(Document)
+                .filter(Document.id == document_id, Document.index_token == token)
+                .update({Document.status: "ready", Document.index_updated_at: _now()}, synchronize_session=False)
+            )
+            if not finished:
+                raise _Superseded()
             session.commit()
+        except _Superseded:
+            session.rollback()
+            _discard_vectors(store, new_chunk_ids, document_id)
+            logger.info("Index run superseded by a newer one", extra={"document_id": document_id})
+            return
         except Exception as exc:
             session.rollback()
-            # Vectors may have been written before the failure; the chunk rows
-            # they point to were rolled back, so remove them.
-            try:
-                store.delete_documents(user_id, [document_id])
-            except Exception:
-                logger.exception("Could not clean up vectors after failed indexing", extra={"document_id": document_id})
-            document = session.get(Document, document_id)
-            if document is None:
-                # Deleted while it was being indexed: nothing left to report on.
-                logger.info("Document deleted during indexing", extra={"document_id": document_id})
-                return
-            logger.exception("Indexing failed", extra={"document_id": document_id})
-            document.status = "failed"
-            document.error = f"{type(exc).__name__}: {exc}"[:1000]
+            _discard_vectors(store, new_chunk_ids, document_id)
+            failed = (
+                session.query(Document)
+                .filter(Document.id == document_id, Document.index_token == token)
+                .update(
+                    {Document.status: "failed", Document.error: f"{type(exc).__name__}: {exc}"[:1000]},
+                    synchronize_session=False,
+                )
+            )
             session.commit()
+            if failed:
+                logger.exception("Indexing failed", extra={"document_id": document_id})
+            else:
+                # Deleted or taken over by a newer run meanwhile: nothing to report.
+                logger.info("Indexing stopped; document deleted or re-queued", extra={"document_id": document_id})
+            return
+        # Committed: the old chunks are gone, so their vectors can go too.
+        _discard_vectors(store, old_chunk_ids, document_id)
     finally:
         session.close()
+
+
+def _discard_vectors(store: VectorStore, chunk_ids: list[int], document_id: int) -> None:
+    """Remove vectors whose chunk rows no longer exist. Leftovers are harmless
+    (search ignores vectors without a chunk row), so a failure is only logged."""
+    try:
+        store.delete_points(chunk_ids)
+    except Exception:
+        logger.exception("Could not remove vectors of discarded chunks", extra={"document_id": document_id})
+
+
+def schedule_indexing(document_id: int, background_tasks: BackgroundTasks | None = None) -> None:
+    """Queue a document for indexing, after the caller has committed it.
+
+    With TASK_QUEUE=celery the job goes to a worker through Redis; otherwise it
+    runs in this process after the response (FastAPI background task). If the
+    broker is unreachable the document is marked so the next sweep (see
+    requeue_stalled) queues it again within minutes.
+    """
+    if settings.task_queue == "celery":
+        from app.worker import index_document_task  # imported here: the worker imports this module
+
+        try:
+            index_document_task.delay(document_id)
+        except Exception:
+            logger.exception("Could not queue indexing; it will be retried", extra={"document_id": document_id})
+            _mark_unqueued(document_id)
+    elif background_tasks is not None:
+        background_tasks.add_task(index_document, document_id)
+    else:
+        _run_inline([document_id])
+
+
+def _mark_unqueued(document_id: int, session_factory: Callable[[], Session] = SessionLocal) -> None:
+    # A NULL queue time counts as stale straight away.
+    session = session_factory()
+    try:
+        session.query(Document).filter(Document.id == document_id, Document.status == "pending").update(
+            {Document.index_updated_at: None}, synchronize_session=False
+        )
+        session.commit()
+    except Exception:
+        logger.exception("Could not mark document for re-queueing", extra={"document_id": document_id})
+    finally:
+        session.close()
+
+
+def _run_inline(document_ids: list[int]) -> None:
+    """Index documents one after another on a single background thread."""
+
+    def run() -> None:
+        for document_id in document_ids:
+            index_document(document_id)
+
+    threading.Thread(target=run, name="inline-indexing", daemon=True).start()
+
+
+def _stale_condition(cutoff: datetime | None):
+    """Documents whose job was lost: queued or indexing, and not touched since `cutoff`.
+
+    A pending document with no queue time failed to reach the broker and is
+    always stale. With cutoff None (an inline API starting up, so nothing of
+    its own can still be running), every queued or indexing document is.
+    """
+    waiting = Document.status.in_(("pending", "indexing"))
+    if cutoff is None:
+        return waiting
+    return and_(waiting, or_(Document.index_updated_at.is_(None), Document.index_updated_at < cutoff))
+
+
+def stalled_documents(session: Session, now: datetime | None = None) -> list[int]:
+    """Documents queued or indexing for longer than INDEX_STALE_MINUTES: their run was lost."""
+    cutoff = (now or _now()) - timedelta(minutes=settings.index_stale_minutes)
+    return [document_id for (document_id,) in session.query(Document.id).filter(_stale_condition(cutoff)).order_by(Document.id)]
+
+
+def requeue_stalled(session_factory: Callable[[], Session] = SessionLocal, *, all_unfinished: bool = False) -> list[int]:
+    """Queue stalled documents again; returns their ids.
+
+    Each document is taken with a conditional update, so processes sweeping at
+    the same time (several workers starting) never queue the same document
+    twice. `all_unfinished` treats every queued or indexing document as lost,
+    which is true only for an inline-mode API that is just starting.
+    """
+    cutoff = None if all_unfinished else _now() - timedelta(minutes=settings.index_stale_minutes)
+    session = session_factory()
+    taken: list[int] = []
+    try:
+        candidates = [d for (d,) in session.query(Document.id).filter(_stale_condition(cutoff)).order_by(Document.id)]
+        for document_id in candidates:
+            won = (
+                session.query(Document)
+                .filter(Document.id == document_id, _stale_condition(cutoff))
+                .update({Document.index_updated_at: _now()}, synchronize_session=False)
+            )
+            session.commit()
+            if won:
+                taken.append(document_id)
+    finally:
+        session.close()
+    if taken:
+        logger.info("Re-queued stalled documents", extra={"count": len(taken)})
+        if settings.task_queue == "celery":
+            for document_id in taken:
+                schedule_indexing(document_id)
+        else:
+            _run_inline(taken)
+    return taken
 
 
 def mark_for_reindex(session: Session, user_id: int, document_id: int) -> Document | None:
@@ -245,8 +389,32 @@ def mark_for_reindex(session: Session, user_id: int, document_id: int) -> Docume
         return None
     document.status = "pending"
     document.error = None
+    document.index_updated_at = _now()
     session.flush()
     return document
+
+
+STATUSES = ("pending", "indexing", "ready", "failed")
+
+
+def batch_status(session: Session, user_id: int, document_ids: list[int] | None = None) -> dict:
+    """Indexing status of the user's documents (or the given ones): counts and per-document detail."""
+    query = session.query(Document.id, Document.title, Document.status, Document.error).filter(Document.user_id == user_id)
+    if document_ids is not None:
+        query = query.filter(Document.id.in_(document_ids))
+    rows = query.order_by(Document.id).all()
+    counts = {status: 0 for status in STATUSES}
+    for row in rows:
+        counts[row.status] = counts.get(row.status, 0) + 1
+    queued = counts["pending"] + counts["indexing"]
+    return {
+        "status": "working" if queued else "idle",
+        "queued": queued,
+        "counts": counts,
+        "documents": [
+            {"id": r.id, "title": r.title, "status": r.status, "error": r.error} for r in rows
+        ],
+    }
 
 
 def delete_document(session: Session, user_id: int, document_id: int, store: VectorStore | None = None) -> bool:

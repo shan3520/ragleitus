@@ -88,3 +88,13 @@ def test_concurrent_indexing_threads_share_one_collection():
         t.join()
     assert errors == []
     assert store.count(1) == 8
+
+
+def test_delete_points_removes_only_those_chunks():
+    store = _store()
+    vector = FakeEmbedder().embed_query("x")
+    store.upsert_document(1, 10, [ChunkVector(100, 1, vector), ChunkVector(101, 1, vector)])
+    store.delete_points([100])
+    assert {h.chunk_id for h in store.search(1, vector, limit=10)} == {101}
+    store.delete_points([])  # nothing to do
+    assert store.count(1) == 1

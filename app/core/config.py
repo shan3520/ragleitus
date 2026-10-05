@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_cache_dir: str | None = None
 
+    # Background work. "inline" runs indexing in the API process after the
+    # response (no extra services); "celery" sends it to workers through Redis.
+    task_queue: Literal["inline", "celery"] = "inline"
+    redis_url: str = "redis://localhost:6379/0"
+    # A document queued or indexing for longer than this is treated as lost (a
+    # worker died, Redis lost the job) and queued again. Keep it above the
+    # longest time a document waits in the queue plus its indexing time.
+    index_stale_minutes: int = 60
+    # How often the API looks for such documents (0 turns the sweep off).
+    index_sweep_minutes: float = 5
+
     # Ingestion and retrieval
     chunk_window_size: int = 800
     chunk_overlap_size: int = 100

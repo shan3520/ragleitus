@@ -1,4 +1,5 @@
-# Starts the web UI and the API with PostgreSQL and Qdrant.
+# Starts the web UI, the API and its indexing worker, with PostgreSQL, Qdrant
+# and Redis (the job queue).
 #   cp .env.example .env   # then fill in the secrets
 #   docker compose up --build
 # Open http://localhost:3000. The API also listens on http://localhost:8000
@@ -24,12 +25,27 @@ services:
     volumes:
       - qdrant-data:/qdrant/storage
 
+  # Job queue for document indexing. Append-only persistence keeps queued jobs
+  # across a Redis restart.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   api:
     build: .
     env_file: .env
-    environment:
+    environment: &backend-env
       DATABASE_URL: postgresql+psycopg://ragforge:${POSTGRES_PASSWORD}@postgres:5432/ragforge
       VECTOR_STORE_URL: http://qdrant:6333
+      TASK_QUEUE: celery
+      REDIS_URL: redis://redis:6379/0
       # The web container (fixed address below) relays the client address for
       # signed-out requests. If you set TRUSTED_PROXIES in .env, include it.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-${RAGFORGE_WEB_IP:-172.30.231.10}}
@@ -42,11 +58,32 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 12
+
+  # Indexes uploaded documents (chunking and embedding) off the API process.
+  # Starts after the api, which has applied the migrations by then. Run more
+  # copies with `docker compose up --scale worker=3`.
+  worker:
+    build: .
+    env_file: .env
+    environment: *backend-env
+    command: ["celery", "-A", "app.worker", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-2}"]
+    volumes:
+      - model-cache:/data/models
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d celery@$$HOSTNAME --timeout 10"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
 
   # Rate limits: signed-in requests count per user. Signed-out ones (login,
   # register) count per client address, which the api takes from the
@@ -81,5 +118,6 @@ networks:
 
 volumes:
   postgres-data:
+  redis-data:
   qdrant-data:
   model-cache:

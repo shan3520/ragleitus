@@ -32,8 +32,8 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 docker compose up --build
 ```
 
-This starts PostgreSQL 16, Qdrant, the API and the web app. Migrations run
-automatically. Open <http://localhost:3000>, create an account, add a provider
+This starts PostgreSQL 16, Qdrant, Redis, the API, an indexing worker and the
+web app. Migrations run automatically. Open <http://localhost:3000>, create an account, add a provider
 key and upload a document. The interactive API is at <http://localhost:8000/docs>.
 
 The first document you upload triggers a one-time download of the embedding
@@ -130,7 +130,7 @@ flowchart LR
 
     subgraph Ingestion
       up[Upload] --> extract[Extract + clean<br/>PyMuPDF] --> store[(document text)]
-      store -. background task .-> chunk[Chunk per page] --> vec[Embed] --> qdrant
+      store -. job via Redis .-> worker[Celery worker] --> chunk[Chunk per page] --> vec[Embed] --> qdrant
     end
 
     subgraph Chat turn
@@ -147,9 +147,29 @@ flowchart LR
   ids. Chunk text lives in the SQL `chunks` table. Every vector query is filtered
   by the owner's `user_id`.
 - **Indexing.** Upload extracts and cleans the text right away, so a bad file
-  fails immediately. Chunking and embedding then run as a background task that
-  records `pending → indexing → ready | failed`. The cleaned pages are kept, so
+  fails immediately. Chunking and embedding then run as a job that records
+  `pending → indexing → ready | failed`. The cleaned pages are kept, so
   re-indexing never needs the original file.
+  - With `TASK_QUEUE=celery` (Docker Compose) jobs go through Redis to Celery
+    workers (`celery -A app.worker worker`); add workers with
+    `docker compose up --scale worker=3`. With the default `inline`, the API
+    runs them itself after responding, so local development needs no Redis.
+  - Each run claims the document with a token. If a second run starts for the
+    same document (Reindex during indexing, a job delivered twice), the newest
+    one wins and the older one discards its chunks and vectors, so the index is
+    never duplicated or left half-replaced.
+  - Jobs lost to a crash, a restart or an unreachable Redis are picked up
+    again. Workers acknowledge a job only after finishing it, so a job whose
+    worker dies is delivered again. The API also checks every
+    `INDEX_SWEEP_MINUTES` (default 5), and workers check when they start, for
+    documents queued or indexing for longer than `INDEX_STALE_MINUTES`
+    (default 60; keep it above your longest queue wait plus indexing time).
+    An upload whose job could not reach Redis is retried at the next check. In
+    inline mode the API re-queues every unfinished document when it starts,
+    since its own jobs died with the previous process; inline mode is meant for
+    a single API process.
+  - `POST /api/documents/batch-status` reports how many of your documents are
+    queued, indexing, ready or failed, with each one's status.
 - **Web app.** `frontend/` is a Next.js App Router app. The browser only talks to
   its own origin: a route handler forwards `/backend/*` to `API_URL` at runtime
   (streaming, so chat tokens arrive as they are generated). No CORS setup is
@@ -274,10 +294,6 @@ container reach the stub on the host:
 
 `docs/SPEC.md` describes more than this. Still to build:
 
-- **Task queue.** Indexing runs as an in-process background task. Moving it to
-  Celery + Redis means wrapping `app.services.ingestion.index_document`, which
-  already opens its own session. Until then, an API restart during indexing
-  leaves the document `pending` or `indexing`, and `POST .../reindex` recovers it.
 - **Prompt library and experiments.** Saving and versioning prompts, and
   comparing prompts, models or retrieval strategies side by side, in the API and
   as pages in the web app.
@@ -294,8 +310,8 @@ container reach the stub on the host:
   up to tens of thousands of chunks per user; beyond that it needs a keyword
   index (e.g. PostgreSQL full-text search).
 
-Some older endpoints still return placeholder data: `/api/export/metrics`,
-`/api/experiments/report` and `/api/documents/batch-status`.
+Some older endpoints still return placeholder data: `/api/export/metrics` and
+`/api/experiments/report`.
 
 ## License
 

@@ -110,6 +110,13 @@ class VectorStore:
             ),
         )
 
+    def delete_points(self, chunk_ids: list[int]) -> None:
+        """Delete specific vectors by chunk id (point ids are chunk ids)."""
+        if not chunk_ids:
+            return
+        self.ensure_collection()
+        self.client.delete(self.collection, points_selector=models.PointIdsList(points=list(chunk_ids)))
+
     def search(self, user_id: int, vector: list[float], limit: int, document_ids: list[int] | None = None) -> list[VectorHit]:
         self.ensure_collection()
         conditions = [_match("user_id", user_id)]

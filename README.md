@@ -158,9 +158,16 @@ flowchart LR
     same document (Reindex during indexing, a job delivered twice), the newest
     one wins and the older one discards its chunks and vectors, so the index is
     never duplicated or left half-replaced.
-  - Jobs lost to a crash or restart are picked up again: workers (or the API, in
-    inline mode) re-queue documents that have been queued or indexing for longer
-    than `INDEX_STALE_MINUTES` (default 30) when they start.
+  - Jobs lost to a crash, a restart or an unreachable Redis are picked up
+    again. Workers acknowledge a job only after finishing it, so a job whose
+    worker dies is delivered again. The API also checks every
+    `INDEX_SWEEP_MINUTES` (default 5), and workers check when they start, for
+    documents queued or indexing for longer than `INDEX_STALE_MINUTES`
+    (default 60; keep it above your longest queue wait plus indexing time).
+    An upload whose job could not reach Redis is retried at the next check. In
+    inline mode the API re-queues every unfinished document when it starts,
+    since its own jobs died with the previous process; inline mode is meant for
+    a single API process.
   - `POST /api/documents/batch-status` reports how many of your documents are
     queued, indexing, ready or failed, with each one's status.
 - **Web app.** `frontend/` is a Next.js App Router app. The browser only talks to

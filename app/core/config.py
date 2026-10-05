@@ -42,9 +42,12 @@ class Settings(BaseSettings):
     # response (no extra services); "celery" sends it to workers through Redis.
     task_queue: Literal["inline", "celery"] = "inline"
     redis_url: str = "redis://localhost:6379/0"
-    # Documents queued or indexing for longer than this (a worker died, the
-    # API restarted) are queued again.
-    index_stale_minutes: int = 30
+    # A document queued or indexing for longer than this is treated as lost (a
+    # worker died, Redis lost the job) and queued again. Keep it above the
+    # longest time a document waits in the queue plus its indexing time.
+    index_stale_minutes: int = 60
+    # How often the API looks for such documents (0 turns the sweep off).
+    index_sweep_minutes: float = 5
 
     # Ingestion and retrieval
     chunk_window_size: int = 800

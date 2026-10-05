@@ -253,88 +253,88 @@ def _chunk_ids(session, document_id) -> set[int]:
     return {c for (c,) in session.query(Chunk.id).filter(Chunk.document_id == document_id)}
 
 
-class _StallingStore:
-    """Wraps a VectorStore and stalls the first run right after it clears the old vectors."""
-
-    def __init__(self, store):
-        self._store = store
-        self.stalled = threading.Event()
-        self.upserts: list[str] = []
-        self._deletes = 0
-
-    def delete_documents(self, user_id, document_ids):
-        self._store.delete_documents(user_id, document_ids)
-        self._deletes += 1
-        if self._deletes == 1:
-            self.stalled.set()
-            time.sleep(0.5)
-
-    def upsert_document(self, user_id, document_id, vectors):
-        self._store.upsert_document(user_id, document_id, vectors)
-        self.upserts.append(threading.current_thread().name)
-
-    def __getattr__(self, name):
-        return getattr(self._store, name)
-
-
-def test_overlapping_runs_leave_exactly_the_newest_index(env):
-    """Two runs at once (Reindex clicked while the upload is still indexing, or a
-    job delivered to two workers): the newer run wins and the older discards its
-    work, so no duplicate chunks or orphaned vectors are left."""
+def test_overlapping_runs_leave_exactly_the_newest_index(env, monkeypatch):
+    """Reindex clicked while the upload is still indexing: the newer run wins and
+    the older discards its work, so no duplicate chunks or orphaned vectors are left."""
     factory, session, user_id, embedder, store = env
     doc = ingestion.create_document(session, user_id, "a.txt", b"Alpha. Beta. Gamma.")
     session.commit()
-    stalling = _StallingStore(store)
+
+    first_is_working = threading.Event()
+    let_first_finish = threading.Event()
+    build = ingestion._build_chunks
+
+    def slow_first_build(document):
+        if threading.current_thread().name == "first":
+            first_is_working.set()
+            let_first_finish.wait(5)
+        return build(document)
+
+    monkeypatch.setattr(ingestion, "_build_chunks", slow_first_build)
 
     def run():
-        ingestion.index_document(doc.id, session_factory=factory, embedder=embedder, store=stalling)
+        ingestion.index_document(doc.id, session_factory=factory, embedder=embedder, store=store)
 
     first = threading.Thread(target=run, name="first")
     first.start()
-    stalling.stalled.wait(5)
+    first_is_working.wait(5)
+    # Reindex: the document goes back to pending and a second run starts and finishes.
+    ingestion.mark_for_reindex(session, user_id, doc.id)
+    session.commit()
     second = threading.Thread(target=run, name="second")
     second.start()
-    first.join(10)
     second.join(10)
+    let_first_finish.set()
+    first.join(10)
 
     session.expire_all()
     assert session.get(Document, doc.id).status == "ready"
     chunk_ids = _chunk_ids(session, doc.id)
     assert chunk_ids and _point_ids(store, user_id, doc.id) == chunk_ids
-    assert "second" in stalling.upserts
 
 
-def test_a_superseded_run_discards_its_chunks_and_vectors(env):
+def test_a_superseded_run_discards_its_work_and_leaves_the_index_alone(env, monkeypatch):
     factory, session, user_id, embedder, store = env
     doc = ingestion.create_document(session, user_id, "a.txt", b"Alpha. Beta.")
     session.commit()
     _index(env, doc.id)
     session.expire_all()
     before = _chunk_ids(session, doc.id)
+    assert _point_ids(store, user_id, doc.id) == before
 
-    class TakenOverWhileWorking:
-        """Another run claims the document after this one started. (Simulated just
-        before this run writes, as SQLite lets only one writer in at a time.)"""
+    ingestion.mark_for_reindex(session, user_id, doc.id)
+    session.commit()
+    build = ingestion._build_chunks
 
-        def __init__(self, inner):
-            self.inner = inner
+    def taken_over(document):
+        # Another run claims the document while this one is working.
+        other = factory()
+        other.query(Document).filter(Document.id == document.id).update({Document.index_token: "newer-run"})
+        other.commit()
+        other.close()
+        return build(document)
 
-        def delete_documents(self, *args):
-            self.inner.delete_documents(*args)
-            other = factory()
-            other.query(Document).filter(Document.id == doc.id).update({Document.index_token: "newer-run"})
-            other.commit()
-            other.close()
-
-        def __getattr__(self, name):
-            return getattr(self.inner, name)
-
-    ingestion.index_document(doc.id, session_factory=factory, embedder=embedder, store=TakenOverWhileWorking(store))
+    monkeypatch.setattr(ingestion, "_build_chunks", taken_over)
+    ingestion.index_document(doc.id, session_factory=factory, embedder=embedder, store=store)
     session.expire_all()
-    # The superseded run's chunks were rolled back and its vectors removed; it did not mark the document ready.
+    # Its chunks were rolled back and its vectors removed; the existing index is untouched.
     assert _chunk_ids(session, doc.id) == before
-    assert _point_ids(store, user_id, doc.id) == set()  # old vectors were cleared by the run; the newer run rebuilds them
+    assert _point_ids(store, user_id, doc.id) == before
     assert session.get(Document, doc.id).index_token == "newer-run"
+
+
+def test_a_duplicate_delivery_of_a_finished_job_does_nothing(env):
+    factory, session, user_id, embedder, store = env
+    doc = ingestion.create_document(session, user_id, "a.txt", b"Alpha. Beta.")
+    session.commit()
+    _index(env, doc.id)
+    session.expire_all()
+    before = (_chunk_ids(session, doc.id), session.get(Document, doc.id).index_token)
+
+    _index(env, doc.id)  # the same job again, e.g. redelivered by the broker
+    session.expire_all()
+    assert (_chunk_ids(session, doc.id), session.get(Document, doc.id).index_token) == before
+    assert session.get(Document, doc.id).status == "ready"
 
 
 def test_stalled_documents_are_found_and_requeued(env, monkeypatch):
@@ -350,21 +350,35 @@ def test_stalled_documents_are_found_and_requeued(env, monkeypatch):
 
     stuck_pending = doc("a", "pending", old)
     stuck_indexing = doc("b", "indexing", old)
-    legacy = doc("c", "indexing", None)  # from before this column existed
-    doc("d", "pending", now)  # just queued
-    doc("e", "ready", old)
-    doc("f", "failed", old)
+    never_queued = doc("c", "pending", None)  # the broker was down, or from before this column existed
+    queued_now = doc("d", "pending", now)
+    working_now = doc("e", "indexing", now)
+    doc("f", "ready", old)
+    doc("g", "failed", old)
     session.commit()
 
-    assert ingestion.stalled_documents(session, now=now) == [stuck_pending, stuck_indexing, legacy]
+    assert ingestion.stalled_documents(session, now=now) == [stuck_pending, stuck_indexing, never_queued]
 
+    ran = []
+    monkeypatch.setattr(ingestion, "_run_inline", lambda ids: ran.extend(ids))
+    assert ingestion.requeue_stalled(factory) == [stuck_pending, stuck_indexing, never_queued]
+    assert ran == [stuck_pending, stuck_indexing, never_queued]
+    # Taken: another sweep (e.g. a second worker starting) finds nothing more to queue.
+    assert ingestion.requeue_stalled(factory) == []
+
+    # An inline API that is starting up owns no running jobs, so every unfinished document was interrupted.
+    ran.clear()
+    assert ingestion.requeue_stalled(factory, all_unfinished=True) == [stuck_pending, stuck_indexing, never_queued, queued_now, working_now]
+
+
+def test_requeued_documents_go_to_celery_when_configured(env, monkeypatch):
+    factory, session, user_id, _, _ = env
+    session.add(Document(user_id=user_id, title="lost", content="x", status="pending", index_updated_at=None))
+    session.commit()
     scheduled = []
+    monkeypatch.setattr(ingestion.settings, "task_queue", "celery")
     monkeypatch.setattr(ingestion, "schedule_indexing", lambda document_id, background_tasks=None: scheduled.append(document_id))
-    assert ingestion.requeue_stalled(factory) == [stuck_pending, stuck_indexing, legacy]
-    assert scheduled == [stuck_pending, stuck_indexing, legacy]
-    # Re-queued documents are not picked up again until they go stale once more.
-    session.expire_all()
-    assert ingestion.stalled_documents(session) == []
+    assert ingestion.requeue_stalled(factory) == scheduled != []
 
 
 def test_schedule_indexing_sends_jobs_to_celery_when_configured(monkeypatch, caplog):
@@ -379,10 +393,23 @@ def test_schedule_indexing_sends_jobs_to_celery_when_configured(monkeypatch, cap
     def broker_down(document_id):
         raise ConnectionError("redis is down")
 
+    marked = []
     monkeypatch.setattr(worker.index_document_task, "delay", broker_down)
+    monkeypatch.setattr(ingestion, "_mark_unqueued", lambda document_id: marked.append(document_id))
     with caplog.at_level("ERROR"):
-        ingestion.schedule_indexing(8)  # does not raise: stale-job recovery retries it
+        ingestion.schedule_indexing(8)  # does not raise: the next sweep queues it again
     assert "Could not queue indexing" in caplog.text
+    assert marked == [8]
+
+
+def test_a_document_that_never_reached_the_broker_is_stale_at_once(env):
+    factory, session, user_id, _, _ = env
+    doc = ingestion.create_document(session, user_id, "a.txt", b"Text.")
+    session.commit()
+    assert ingestion.stalled_documents(session) == []
+    ingestion._mark_unqueued(doc.id, factory)
+    session.expire_all()
+    assert ingestion.stalled_documents(session) == [doc.id]
 
 
 def test_batch_status_counts_and_lists_the_users_documents(env):

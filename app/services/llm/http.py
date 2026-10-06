@@ -75,6 +75,18 @@ def google_retry_delay(response: httpx.Response) -> float | None:
     return None
 
 
+def no_allowance(response: httpx.Response) -> bool:
+    """A 429 saying the key may make no requests at all to this model.
+
+    Mistral answers a model its plan does not include with 429 and
+    x-ratelimit-limit-req-minute: 0; waiting cannot help.
+    """
+    return response.status_code == 429 and response.headers.get("x-ratelimit-limit-req-minute", "").strip() == "0"
+
+
+NO_ALLOWANCE = "This key's plan allows no requests to this model (per-minute limit 0); choose another model."
+
+
 def error_status(response: httpx.Response) -> int:
     """The response's status, with Google's way of rejecting a key made a 401.
 
@@ -104,17 +116,20 @@ async def raise_for_status(response: httpx.Response, provider: str, *, include_b
     if response.status_code < 400:
         return
     retry_after = retry_after_seconds(response.headers)
+    blocked = no_allowance(response)
     if not include_body:
         raise ProviderError(
-            f"{provider} returned HTTP {response.status_code}", status_code=response.status_code, retry_after=retry_after
+            f"{provider} returned HTTP {response.status_code}" + (f". {NO_ALLOWANCE}" if blocked else ""),
+            status_code=response.status_code, retry_after=retry_after, retryable=False if blocked else None,
         )
     await response.aread()
     if retry_after is None:
         retry_after = google_retry_delay(response)
     raise ProviderError(
-        f"{provider} returned HTTP {response.status_code}: {_error_text(response)}",
+        f"{provider} returned HTTP {response.status_code}: {_error_text(response)}" + (f". {NO_ALLOWANCE}" if blocked else ""),
         status_code=error_status(response),
         retry_after=retry_after,
+        retryable=False if blocked else None,
     )
 
 

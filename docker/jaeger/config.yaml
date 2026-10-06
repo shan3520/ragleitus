@@ -1,0 +1,56 @@
+# Jaeger v2 with traces kept on disk (Badger, in the jaeger-data volume), so
+# they survive a restart; spans older than 7 days are dropped. Based on
+# Jaeger's own config-badger.yaml example.
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+  telemetry:
+    resource:
+      service.name: jaeger
+    logs:
+      level: info
+
+extensions:
+  healthcheckv2:
+    use_v2: true
+    http:
+      endpoint: 0.0.0.0:13133
+
+  jaeger_query:
+    storage:
+      traces: badger_store
+    http:
+      endpoint: 0.0.0.0:16686
+    grpc:
+      endpoint: 0.0.0.0:16685
+
+  jaeger_storage:
+    backends:
+      badger_store:
+        badger:
+          # /var/tmp is writable by Jaeger's user (10001); the volume is mounted there.
+          directories:
+            keys: /var/tmp/jaeger/keys
+            values: /var/tmp/jaeger/values
+          ephemeral: false
+          ttl:
+            spans: 168h
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: badger_store

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.services.llm import create_provider, get_spec
 
@@ -25,7 +25,8 @@ class Live:
     """One provider to test: its key, base URL (self-hosted only) and models."""
 
     name: str
-    key: str
+    # Kept out of repr, so a failing assertion that shows `live` cannot print the key.
+    key: str = field(repr=False)
     base_url: str | None
     model: str
     embedding_model: str | None

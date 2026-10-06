@@ -38,6 +38,14 @@ class ProviderSpec:
     # Suggested reranking model (see llm.rerank), with the same None / "" meaning.
     rerank_model: str | None = None
     rerank_format: Literal["cohere", "nvidia"] = "cohere"
+    # Why the provider is not offered for new keys, if it isn't. Keys already
+    # stored keep working; the live tests (tests/live) still run it, so it can
+    # be verified and offered again.
+    unavailable: str | None = None
+
+    @property
+    def offered(self) -> bool:
+        return self.unavailable is None
 
     @property
     def supports_embeddings(self) -> bool:
@@ -73,6 +81,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
             "nvidia", "NVIDIA NIM", "openai_compatible", "meta/llama-3.1-70b-instruct", base_url="https://integrate.api.nvidia.com/v1",
             embedding_model="nvidia/nv-embedqa-e5-v5", embedding_input_type=True,
             rerank_model="nvidia/llama-3.2-nv-rerankqa-1b-v2", rerank_format="nvidia",
+            # Found by the live tests on 2026-10-06 (see the README).
+            unavailable=(
+                "NVIDIA NIM is not offered for new keys until it is verified again: NVIDIA has retired "
+                "its default models, and its model list answers without a key, so a key cannot be checked."
+            ),
         ),
         ProviderSpec(
             "together", "Together AI", "openai_compatible", "meta-llama/Llama-3.3-70B-Instruct-Turbo", base_url="https://api.together.xyz/v1",

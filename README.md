@@ -15,7 +15,7 @@ that remain, are in [Assumptions and limits](#assumptions-and-limits).
 | Area | What you get |
 |---|---|
 | Accounts | Register and log in (argon2 password hashing, JWT). Every document, key, conversation and metric is private to its owner. |
-| Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, NVIDIA NIM, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
+| Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). NVIDIA NIM is supported but not offered for new keys until it is verified again (see [Assumptions and limits](#assumptions-and-limits)). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
 | Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Embeddings come from a local model, or from a provider with your own key. Re-index or delete at any time. |
 | Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion, optionally reranked), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day, with CSV/JSON export. |
@@ -175,9 +175,10 @@ flowchart LR
 - **Embeddings.** By default documents are embedded by a local model
   (fastembed, no key needed). In Settings → Embeddings a user can switch to one
   of their provider keys: OpenAI (`text-embedding-3-small`), Google Gemini
-  (`gemini-embedding-001`), Mistral (`mistral-embed`), Together AI, NVIDIA NIM,
-  or a self-hosted OpenAI-compatible server such as Ollama (any model it
-  serves). Anthropic, Groq and OpenRouter offer no embeddings API.
+  (`gemini-embedding-001`), Mistral (`mistral-embed`), Together AI, or a
+  self-hosted OpenAI-compatible server such as Ollama (any model it serves).
+  Anthropic, Groq and OpenRouter offer no embeddings API. (NVIDIA NIM is
+  supported too, for users who already stored an NVIDIA key.)
   - A choice is checked with one embedding call before it is saved.
   - It applies to documents indexed from then on. Each document records the
     model its vectors were made with, and a question is embedded once per model
@@ -246,9 +247,10 @@ flowchart LR
     (`LOCAL_RERANK_MODEL`, default `Xenova/ms-marco-MiniLM-L-6-v2`, about
     80 MB, downloaded on first use into `EMBEDDING_CACHE_DIR`).
   - A provider's rerank API with the user's own key: Together AI
-    (`/v1/rerank`), NVIDIA NIM (`ai.api.nvidia.com/v1/retrieval/.../reranking`),
-    or a self-hosted server with a Cohere-style `/rerank` endpoint (vLLM,
-    Infinity, LocalAI). The choice is checked with a test call before it is
+    (`/v1/rerank`) or a self-hosted server with a Cohere-style `/rerank`
+    endpoint (vLLM, Infinity, LocalAI). NVIDIA NIM's endpoint
+    (`ai.api.nvidia.com/v1/retrieval/.../reranking`) is implemented but
+    currently retired by NVIDIA. The choice is checked with a test call before it is
     saved, and every call is in telemetry as `rerank`.
   - If the reranker can't be used (key deleted, provider down), the passages
     keep their fused order and the answer says why.
@@ -604,9 +606,13 @@ What is still not there:
   for the default chat model `meta/llama-3.1-70b-instruct` and embedding model
   `nvidia/nv-embedqa-e5-v5` (end of life August 2026) and for the reranking
   endpoint (May 2026), and its `/v1/models` answers without a key, so the key
-  check accepts any key. They stay as they are until an NVIDIA key can confirm
-  replacements. Meanwhile NVIDIA chat and embeddings need a current model
-  chosen by name, and NVIDIA reranking should be expected to fail.
+  check accepts any key. Until an NVIDIA key can confirm replacements, **NVIDIA
+  is not offered for new keys**: it is left out of the provider list and the
+  embedding and reranking choices, and saving a new NVIDIA key is refused with
+  the reason. Users who already stored one keep it (chat with a current model
+  chosen by name works; reranking should be expected to fail), and
+  `pytest -m live tests/live` still runs NVIDIA, so it can be verified and
+  offered again (`unavailable` in `app/services/llm/registry.py`).
 
 ## License
 

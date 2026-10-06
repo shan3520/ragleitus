@@ -23,13 +23,19 @@ def test_request_id_custom_header_preserved():
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] == custom_id
 
-def test_rate_limit_middleware_exceeded():
-    rate_limiter.reset()
-    app = create_app()
-    client = TestClient(app)
+def test_rate_limit_middleware_exceeded(monkeypatch):
+    from app.core import middleware
+    from app.core.rate_limit import RateLimiter
+
+    # A bucket that does not refill during the test. With the real one (60 a
+    # minute) a token came back whenever the loop below took over a second,
+    # as it could under full-suite load, and the request meant to be refused got through.
+    limiter = RateLimiter(rate=1e-6, capacity=5)
+    monkeypatch.setattr(middleware, "rate_limiter", limiter)
+    client = TestClient(create_app())
 
     # Exhaust tokens for test client
-    for _ in range(rate_limiter.capacity):
+    for _ in range(limiter.capacity):
         resp = client.get("/health")
         assert resp.status_code == 200
 
@@ -37,8 +43,7 @@ def test_rate_limit_middleware_exceeded():
     overflow_resp = client.get("/health")
     assert overflow_resp.status_code == 429
     assert overflow_resp.json()["detail"] == "Too many requests. Please slow down."
-    assert "Retry-After" in overflow_resp.headers
-    rate_limiter.reset()
+    assert int(overflow_resp.headers["Retry-After"]) > 60
 
 
 def _whoami_app(monkeypatch, trusted: list[str]):

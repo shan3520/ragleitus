@@ -194,10 +194,12 @@ def options(session: Session, user_id: int) -> list[dict]:
     """What a user can choose from: the local model, and each provider that
     offers embeddings, marked with whether the user has a key for it."""
     keys = {k.provider for k in list_provider_keys(session, user_id)}
+    current = get_choice(session, user_id).provider
     local = local_choice()
     result = [{"provider": LOCAL, "label": "Local model (on this server)", "default_model": local.model, "has_key": True}]
     for spec in PROVIDERS.values():
-        if spec.supports_embeddings:
+        # Not offered for new keys: listed only to users who have one or chose it.
+        if spec.supports_embeddings and (spec.offered or spec.name in keys or spec.name == current):
             result.append(
                 {
                     "provider": spec.name,

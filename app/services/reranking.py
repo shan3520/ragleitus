@@ -130,12 +130,14 @@ def rerank(reranker: Reranker, query: str, passages: list[str]) -> list[float]:
 def options(session: Session, user_id: int) -> list[dict]:
     """Off, the local model, and each provider that offers reranking (with whether the user has its key)."""
     keys = {k.provider for k in list_provider_keys(session, user_id)}
+    current = get_choice(session, user_id).provider
     result = [
         {"provider": OFF, "label": "Off", "default_model": "", "has_key": True},
         {"provider": LOCAL, "label": "Local model (on this server)", "default_model": settings.local_rerank_model, "has_key": True},
     ]
     for spec in PROVIDERS.values():
-        if spec.supports_reranking:
+        # Not offered for new keys: listed only to users who have one or chose it.
+        if spec.supports_reranking and (spec.offered or spec.name in keys or spec.name == current):
             result.append(
                 {"provider": spec.name, "label": spec.label, "default_model": spec.rerank_model, "has_key": spec.name in keys}
             )

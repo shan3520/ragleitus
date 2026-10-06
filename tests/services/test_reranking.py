@@ -41,7 +41,9 @@ def test_reranking_is_off_until_chosen(db_session):
     described = reranking.describe(db_session, user.id)
     assert described["provider"] == "none" and described["candidates"] == 20
     providers = [o["provider"] for o in described["options"]]
-    assert providers == ["none", "local", "nvidia", "together", "custom"]
+    assert providers == ["none", "local", "together", "custom"]  # NVIDIA only to users with its key
+    save_provider_key(db_session, user.id, "nvidia", encrypt_key("nvapi-existingkey1234"))
+    assert "nvidia" in [o["provider"] for o in reranking.options(db_session, user.id)]
 
 
 def test_choose_local_then_a_provider_then_off(db_session):

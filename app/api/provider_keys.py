@@ -53,7 +53,11 @@ def _out(pk) -> dict:
 
 @router.get("/api/providers", response_model=list[ProviderOut])
 def list_providers(user: User = Depends(get_current_user), session: Session = Depends(get_db)):
-    """Supported LLM providers, and whether the current user has a key stored for each."""
+    """Supported LLM providers, and whether the current user has a key stored for each.
+
+    A provider that is not offered for new keys (see ProviderSpec.unavailable)
+    is listed only to users who already have its key.
+    """
     configured = {pk.provider for pk in list_provider_keys(session, user.id)}
     return [
         ProviderOut(
@@ -64,6 +68,7 @@ def list_providers(user: User = Depends(get_current_user), session: Session = De
             configured=spec.name in configured,
         )
         for spec in PROVIDERS.values()
+        if spec.offered or spec.name in configured
     ]
 
 
@@ -84,6 +89,8 @@ async def create_provider_key(
         spec = get_spec(payload.provider)
     except UnknownProviderError:
         raise HTTPException(status_code=400, detail=f"Unknown provider '{payload.provider}'")
+    if not spec.offered and get_provider_key(session, user.id, spec.name) is None:
+        raise HTTPException(status_code=400, detail=spec.unavailable)
     base_url = str(payload.base_url).rstrip("/") if payload.base_url else None
     if spec.requires_base_url and not base_url:
         raise HTTPException(status_code=400, detail=f"{spec.label} needs a base_url")

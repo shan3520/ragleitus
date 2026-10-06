@@ -100,6 +100,23 @@ def test_list_models():
     assert asyncio.run(_provider(handler).list_models()) == ["a", "b"]
 
 
+def test_a_made_up_key_fails_where_the_public_model_list_would_accept_it():
+    # OpenRouter, for real: /models answers anyone; /models/user needs a valid key.
+    def handler(request):
+        if request.url.path == "/api/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "openai/gpt-4o-mini"}]})
+        assert request.url.path == "/api/v1/models/user"
+        return httpx.Response(401, json={"error": {"message": "Unauthorized", "code": 401}})
+
+    provider = OpenAICompatibleProvider(
+        "openrouter", "sk-or-v1-madeup", "https://openrouter.ai/api/v1",
+        transport=httpx.MockTransport(handler), models_path="/models/user",
+    )
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(provider.list_models())
+    assert exc.value.is_auth_error and "sk-or-v1-madeup" not in exc.value.message
+
+
 def test_no_authorization_header_when_key_is_empty():
     headers = {}
 

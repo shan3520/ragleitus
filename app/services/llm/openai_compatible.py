@@ -23,6 +23,7 @@ class OpenAICompatibleProvider:
         transport: httpx.AsyncBaseTransport | None = None,
         url_guard: Callable[[str], Awaitable[None]] | None = None,
         expose_error_body: bool = True,
+        models_path: str = "/models",
     ):
         self.name = name
         self._api_key = api_key
@@ -32,6 +33,7 @@ class OpenAICompatibleProvider:
         # For user-supplied URLs: checked before every request (see url_guard.py).
         self._url_guard = url_guard
         self._expose_error_body = expose_error_body
+        self._models_path = models_path
 
     async def _check_url(self) -> None:
         if self._url_guard is not None:
@@ -90,7 +92,7 @@ class OpenAICompatibleProvider:
         await self._check_url()
         try:
             async with make_client(self._transport) as client:
-                response = await client.get(f"{self._base_url}/models", headers=self._headers())
+                response = await client.get(f"{self._base_url}{self._models_path}", headers=self._headers())
                 await raise_for_status(response, self.name, include_body=self._expose_error_body)
                 payload = response.json()
         except httpx.HTTPError as exc:

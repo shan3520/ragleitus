@@ -17,7 +17,7 @@ that remain, are in [Assumptions and limits](#assumptions-and-limits).
 | Accounts | Register and log in (argon2 password hashing, JWT). Every document, key, conversation and metric is private to its owner. |
 | Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, NVIDIA NIM, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
 | Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Embeddings come from a local model, or from a provider with your own key. Re-index or delete at any time. |
-| Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
+| Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion, optionally reranked), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day, with CSV/JSON export. |
 | Observability | Prometheus metrics, OpenTelemetry traces (to any OTLP backend and to Langfuse), JSON logs with trace ids, and an optional Prometheus + Grafana + Jaeger stack with a ready-made dashboard. |
 | Prompts and experiments | A versioned prompt library you can chat with, and experiments that answer the same questions with several prompts, models and retrieval strategies and compare their quality, latency and cost (run as a LangGraph pipeline), with CSV/JSON export. |
@@ -61,9 +61,9 @@ alembic upgrade head
 uvicorn app.main:app --reload --no-proxy-headers
 ```
 
-To try it offline, set `EMBEDDING_BACKEND=fake` in `.env`. That uses a hashing
-embedder instead of the real model, so retrieval quality is poor, but every
-feature works.
+To try it offline, set `EMBEDDING_BACKEND=fake` (and `RERANK_BACKEND=fake`) in
+`.env`. That uses a hashing embedder and a word-overlap reranker instead of the
+real models, so retrieval quality is poor, but every feature works.
 
 Then start the web app (Node.js 20.9+) in a second terminal:
 
@@ -229,6 +229,24 @@ flowchart LR
   - On SQLite (local development and the tests) your chunks are scored with
     BM25 in memory, which is fine up to tens of thousands of chunks.
   - Only the passages that are returned are loaded from the database.
+- **Reranking** (optional, off by default; Settings → Reranking or
+  `PUT /api/settings/reranking`). A reranker reads the question together with
+  each candidate passage and scores how well it answers it, which is sharper
+  than comparing vectors but slower. When it is on, the best
+  `RERANK_CANDIDATES` (default 20) fused passages are scored and the top ones
+  are kept.
+  - `local` runs a small cross-encoder on the server with fastembed
+    (`LOCAL_RERANK_MODEL`, default `Xenova/ms-marco-MiniLM-L-6-v2`, about
+    80 MB, downloaded on first use into `EMBEDDING_CACHE_DIR`).
+  - A provider's rerank API with the user's own key: Together AI
+    (`/v1/rerank`), NVIDIA NIM (`ai.api.nvidia.com/v1/retrieval/.../reranking`),
+    or a self-hosted server with a Cohere-style `/rerank` endpoint (vLLM,
+    Infinity, LocalAI). The choice is checked with a test call before it is
+    saved, and every call is in telemetry as `rerank`.
+  - If the reranker can't be used (key deleted, provider down), the passages
+    keep their fused order and the answer says why.
+  - Chat uses the setting; an experiment variant can be set to rerank or not,
+    so the two can be compared on the same questions.
 - **Web app.** `frontend/` is a Next.js App Router app. The browser only talks to
   its own origin: a route handler forwards `/backend/*` to `API_URL` at runtime
   (streaming, so chat tokens arrive as they are generated). No CORS setup is
@@ -316,11 +334,11 @@ flowchart LR
   Tempo, an OpenTelemetry Collector).
   - `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (plus `LANGFUSE_HOST` for a
     self-hosted Langfuse) send them to Langfuse's OTLP endpoint.
-  - Requests get server spans. `rag.retrieve`, `rag.generate`, `rag.evaluate`,
-    `index.document` and each experiment step get their own spans, with the
-    OpenTelemetry GenAI attributes (`gen_ai.system`, model, token usage) that
-    Langfuse reads as generations, and the user and conversation as
-    `user.id` and `session.id`.
+  - Requests get server spans. `rag.retrieve`, `rag.rerank`, `rag.generate`,
+    `rag.evaluate`, `index.document` and each experiment step get their own
+    spans, with the OpenTelemetry GenAI attributes (`gen_ai.system`, model,
+    token usage) that Langfuse reads as generations, and the user and
+    conversation as `user.id` and `session.id`.
   - Prompt and answer text are added only with `TRACE_CONTENT=true`; keys never
     are.
 - **Logs** are JSON lines with every field a log call passes (request id, path,
@@ -404,6 +422,7 @@ counted as `unpriced_requests` in the telemetry summary.
 | `GET /api/providers`, `POST/GET/DELETE /api/provider-keys`, `POST /api/provider-keys/{provider}/validate` | Providers and keys |
 | `POST /api/documents`, `GET /api/documents[/{id}]`, `POST /api/documents/{id}/reindex`, `DELETE /api/documents/{id}` | Documents |
 | `GET/PUT /api/settings/embeddings`, `POST /api/settings/embeddings/reindex` | Embedding model |
+| `GET/PUT /api/settings/reranking` | Reranker (`none`, `local` or a provider) |
 | `POST/GET /api/prompts`, `GET/PATCH/DELETE /api/prompts/{id}`, `POST /api/prompts/{id}/versions`, `POST /api/prompts/{id}/clone`, `GET /api/prompts/default` | Prompt library |
 | `POST/GET /api/experiments`, `GET/DELETE /api/experiments/{id}`, `POST /api/experiments/{id}/run`, `GET /api/experiments/{id}/compare`, `GET /api/experiments/{id}/export?format=csv\|json`, `GET /api/experiments/report` | Experiments |
 | `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`, `POST /api/conversations/{id}/messages` | Chat |
@@ -499,9 +518,6 @@ The spec leaves these open; this is what RAGForge assumes:
 
 What is still not there:
 
-- **Reranking.** The spec lists it as optional. Retrieval fuses dense and
-  keyword rankings with reciprocal rank fusion; there is no cross-encoder or
-  LLM reranking step.
 - **Tested against stand-ins, not every provider.** Provider adapters and
   embedders are tested against mocked HTTP and a stub OpenAI-compatible server
   (the browser tests use it); they follow each provider's published API but

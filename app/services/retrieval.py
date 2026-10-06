@@ -17,8 +17,9 @@ memory.
 
 from __future__ import annotations
 
+import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -26,12 +27,15 @@ from sqlalchemy.orm import Session
 from app.core import metrics, tracing
 from app.core.config import settings
 from app.models.document import Chunk, Document
-from app.services import embedding_service, keyword_search
+from app.services import embedding_service, keyword_search, reranking
 from app.services.embedding_service import EmbedderFactory, EmbeddingUnavailable
 from app.services.embeddings import Embedder, get_embedder
 from app.services.llm.base import ProviderError
+from app.services.reranking import RerankerFactory, RerankUnavailable
 from app.services.rrf import reciprocal_rank_fusion
 from app.services.vector_store import VectorStore, get_vector_store
+
+logger = logging.getLogger(__name__)
 
 STRATEGIES = ("hybrid", "dense", "keyword")
 
@@ -50,6 +54,8 @@ class RetrievedChunk:
     score: float
     dense_rank: int | None
     keyword_rank: int | None
+    # The reranker's score when the passages were reranked (see reranking).
+    rerank_score: float | None = None
 
 
 def _embedding_groups(session: Session, user_id: int, document_ids: list[int] | None):
@@ -85,6 +91,8 @@ def retrieve(
     embedder_factory: EmbedderFactory | None = None,
     warnings: list[str] | None = None,
     strategy: str = "hybrid",
+    rerank: bool | None = None,
+    reranker_factory: RerankerFactory | None = None,
 ) -> list[RetrievedChunk]:
     """The passages that best answer `query`, best first, at most `k`.
 
@@ -98,6 +106,12 @@ def retrieve(
     `strategy` is "hybrid" (both rankings fused), "dense" (vectors only) or
     "keyword" (keyword search only); experiments compare them.
 
+    `rerank`: None reranks when the user has turned reranking on (chat);
+    True or False say so explicitly (experiment variants). Reranking scores
+    the best RERANK_CANDIDATES passages with the user's reranker and keeps the
+    top `k`; if the reranker can't be used, the fused order is kept and a
+    warning says why.
+
     `embedder` and `store` replace the local model and its store (tests);
     `embedder_factory` replaces how a provider embedder is built.
     """
@@ -106,7 +120,8 @@ def retrieve(
     started = time.monotonic()
     with tracing.span("rag.retrieve", retrieval__strategy=strategy, retrieval__top_k=k or settings.retrieval_top_k) as current:
         results = _retrieve(
-            session, user_id, query, k, document_ids, embedder, store, embedder_factory, warnings, strategy
+            session, user_id, query, k, document_ids, embedder, store, embedder_factory, warnings, strategy,
+            rerank, reranker_factory,
         )
         current.set_attribute("retrieval.results", len(results))
         if warnings:
@@ -115,7 +130,10 @@ def retrieve(
     return results
 
 
-def _retrieve(session, user_id, query, k, document_ids, embedder, store, embedder_factory, warnings, strategy):
+def _retrieve(
+    session, user_id, query, k, document_ids, embedder, store, embedder_factory, warnings, strategy,
+    rerank=None, reranker_factory=None,
+):
     k = k or settings.retrieval_top_k
     if not query.strip():
         return []
@@ -126,6 +144,10 @@ def _retrieve(session, user_id, query, k, document_ids, embedder, store, embedde
     groups = _embedding_groups(session, user_id, document_ids)
     if not groups:
         return []
+    reranker_choice = _rerank_choice(session, user_id, rerank, warnings)
+    if reranker_choice is not None:
+        # Enough candidates from each ranker for the reranker to choose from.
+        candidates = max(candidates, settings.rerank_candidates)
 
     dense_rankings: list[list[int]] = []
     for choice, dimension, count in groups if strategy != "keyword" else ():
@@ -185,8 +207,10 @@ def _retrieve(session, user_id, query, k, document_ids, embedder, store, embedde
     dense_pos = {chunk_id: i + 1 for ranking in dense_rankings for i, chunk_id in enumerate(ranking)}
     keyword_pos = {chunk_id: i + 1 for i, chunk_id in enumerate(keyword_ranking)}
 
+    pool = fused[: max(k, settings.rerank_candidates)] if reranker_choice is not None else fused[:k]
+
     results = []
-    for chunk_key, score in fused[:k]:
+    for chunk_key, score in pool:
         chunk_id = int(chunk_key)
         _, content, page_number, document_id, title = by_id[chunk_id]
         results.append(
@@ -201,4 +225,55 @@ def _retrieve(session, user_id, query, k, document_ids, embedder, store, embedde
                 keyword_rank=keyword_pos.get(chunk_id),
             )
         )
+    if reranker_choice is not None:
+        return _rerank(session, user_id, query, results, k, reranker_choice, reranker_factory, warnings)
     return results
+
+
+def _rerank_choice(session, user_id, rerank, warnings):
+    """The reranker to use, or None to keep the fused order."""
+    if rerank is False:
+        return None
+    choice = reranking.get_choice(session, user_id)
+    if choice.is_off:
+        if rerank and warnings is not None:
+            warnings.append("Reranking was asked for, but it is off in your settings, so passages are in their usual order.")
+        return None
+    return choice
+
+
+def _rerank(session, user_id, query, results, k, choice, reranker_factory, warnings):
+    """The top `k` of `results` by the reranker's scores; the fused top `k` if it fails."""
+    if not results:
+        return results
+    started = time.monotonic()
+    reranker = None
+    with tracing.span(
+        "rag.rerank", rerank__provider=choice.provider, rerank__model=choice.model, rerank__candidates=len(results)
+    ) as current:
+        try:
+            reranker = (reranker_factory or reranking.build_reranker)(session, user_id, choice)
+            scores = reranking.rerank(reranker, query, [r.content for r in results])
+        except (RerankUnavailable, ProviderError) as exc:
+            reason = exc.message if isinstance(exc, ProviderError) else str(exc)
+            return _rerank_failed(results, k, choice, reason, warnings, current)
+        except Exception as exc:  # the local model failed to load or run
+            logger.exception("Reranking failed", extra={"provider": choice.provider})
+            return _rerank_failed(results, k, choice, type(exc).__name__, warnings, current)
+        finally:
+            if reranker is not None:
+                reranking.record_calls(session, user_id, reranker)
+            metrics.RERANK_DURATION.labels("local" if choice.is_local else choice.provider).observe(
+                time.monotonic() - started
+            )
+    # Stable: equal scores keep their fused order.
+    order = sorted(range(len(results)), key=lambda i: -scores[i])
+    return [replace(results[i], rerank_score=scores[i]) for i in order[:k]]
+
+
+def _rerank_failed(results, k, choice, reason, warnings, current):
+    current.set_attribute("rerank.error", reason[:500])
+    if warnings is not None:
+        name = "the local model" if choice.is_local else f"{choice.provider}/{choice.model}"
+        warnings.append(f"Passages could not be reranked with {name}, so they are in their usual order: {reason}")
+    return results[:k]

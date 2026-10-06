@@ -29,7 +29,7 @@ from app.core.config import settings
 from app.core.sanitization import spreadsheet_safe
 from app.models.document import Document
 from app.models.experiment import Experiment, ExperimentResult, ExperimentVariant
-from app.services import evaluators
+from app.services import evaluators, reranking
 from app.services.chat_service import ChatError
 from app.services.evaluation_scoring import ScoreSummary, compare_experiments
 from app.services.llm import UnknownProviderError, get_spec
@@ -131,10 +131,22 @@ def _variant(session: Session, user_id: int, position: int, raw: dict) -> Experi
         prompt_label = f"{version.prompt.name} v{version.version}"
     else:
         version_id, prompt_label = None, BUILT_IN_PROMPT
+    rerank = bool(raw.get("rerank"))
+    if rerank:
+        _check_reranking(session, user_id, label)
     return ExperimentVariant(
         position=position, label=label, prompt_version_id=version_id, prompt_label=prompt_label[:300],
-        provider=spec.name, model=model[:255], retrieval=retrieval, top_k=top_k,
+        provider=spec.name, model=model[:255], retrieval=retrieval, top_k=top_k, rerank=rerank,
     )
+
+
+def _check_reranking(session: Session, user_id: int, label: str) -> None:
+    """A variant that reranks needs the user's reranker to be on and usable."""
+    choice = reranking.get_choice(session, user_id)
+    if choice.is_off:
+        raise ExperimentError(f"{label}: turn on reranking in Settings first.")
+    if not choice.is_local and get_provider_key(session, user_id, choice.provider) is None:
+        raise ExperimentError(f"{label}: reranking uses {get_spec(choice.provider).label}, which has no API key stored.")
 
 
 def create_experiment(
@@ -246,6 +258,7 @@ def variant_dict(variant: ExperimentVariant) -> dict:
         "model": variant.model,
         "retrieval": variant.retrieval,
         "top_k": variant.top_k,
+        "rerank": variant.rerank,
     }
 
 
@@ -306,6 +319,8 @@ def start_run(session: Session, user_id: int, experiment_id: int) -> Experiment:
         raise ExperimentBusyError("The experiment is already running.")
     for variant in experiment.variants:
         _check_provider(session, user_id, variant.provider, variant.label)
+        if variant.rerank:
+            _check_reranking(session, user_id, variant.label)
         if variant.prompt_version_id is None and variant.prompt_label != BUILT_IN_PROMPT:
             # Running it with the built-in prompt instead would mislabel the results.
             raise ExperimentError(
@@ -458,7 +473,7 @@ def compare(session: Session, user_id: int, experiment_id: int) -> dict:
 
 EXPORT_COLUMNS = [
     "experiment", "case", "question", "reference_answer", "variant", "prompt", "provider", "model", "retrieval",
-    "top_k", "answer", "cited_passages", "quality", *JUDGE_METRICS, "hallucination", "rouge_l", "latency_ms",
+    "top_k", "reranked", "answer", "cited_passages", "quality", *JUDGE_METRICS, "hallucination", "rouge_l", "latency_ms",
     "prompt_tokens", "completion_tokens", "cost_usd", "error",
 ]
 
@@ -482,6 +497,7 @@ def export_rows(session: Session, user_id: int, experiment_id: int) -> tuple[Exp
                 "model": variant.model,
                 "retrieval": variant.retrieval,
                 "top_k": variant.top_k,
+                "reranked": variant.rerank,
                 "answer": r.answer,
                 "cited_passages": " ".join(f"[{c['number']}]" for c in (r.citations or [])),
                 "quality": _quality(r),

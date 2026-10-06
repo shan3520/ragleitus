@@ -15,6 +15,7 @@ os.environ["JWT_SECRET"] = "test-jwt-secret-not-for-production"
 os.environ["PROVIDER_KEY_SECRET"] = "test-provider-key-secret-not-for-production"
 os.environ["VECTOR_STORE_URL"] = ":memory:"
 os.environ["EMBEDDING_BACKEND"] = "fake"
+os.environ["RERANK_BACKEND"] = "fake"
 # A local HTTP proxy would let outbound requests past the loopback exemption below.
 for _proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
     os.environ.pop(_proxy_var, None)

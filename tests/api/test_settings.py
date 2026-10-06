@@ -124,3 +124,42 @@ def test_chat_says_when_documents_could_only_be_searched_by_keyword(client):
         "Add the key, or switch embeddings back to the local model in Settings."
     ]
     assert client.get("/api/settings/embeddings", headers=headers).json()["key_missing"] is True
+
+
+class _FakeProviderReranker:
+    """Takes ProviderReranker's arguments, so the real key lookup runs."""
+
+    def __init__(self, provider, api_key, model, base_url=None):
+        self.provider, self.model, self.model_name, self.calls = provider, model, f"{provider}/{model}", []
+
+    def rerank(self, query, passages):
+        return [float(len(p)) for p in passages]
+
+
+def test_reranking_settings(client, monkeypatch):
+    from app.services import reranking
+
+    monkeypatch.setattr(reranking, "ProviderReranker", _FakeProviderReranker)
+    assert client.get("/api/settings/reranking").status_code == 401
+    alice, _ = login(client, unique_username("rr"))
+    bob, _ = login(client, unique_username("rr"))
+
+    start = client.get("/api/settings/reranking", headers=alice).json()
+    assert (start["provider"], start["key_missing"]) == ("none", False)
+    assert {o["provider"]: o["has_key"] for o in start["options"]}["together"] is False
+
+    local = client.put("/api/settings/reranking", json={"provider": "local"}, headers=alice)
+    assert local.status_code == 200 and local.json()["provider"] == "local"
+
+    refused = client.put("/api/settings/reranking", json={"provider": "together"}, headers=alice)
+    assert refused.status_code == 400 and "No API key stored for Together AI" in refused.json()["detail"]
+    _key(client, alice, "together")
+    saved = client.put("/api/settings/reranking", json={"provider": "together"}, headers=alice)
+    assert saved.status_code == 200, saved.text
+    assert (saved.json()["provider"], saved.json()["model"]) == ("together", "Salesforce/Llama-Rank-V1")
+
+    assert client.get("/api/settings/reranking", headers=bob).json()["provider"] == "none"  # private
+    for payload, status in [({"provider": "openai"}, 400), ({"provider": ""}, 422), ({}, 422)]:
+        assert client.put("/api/settings/reranking", json=payload, headers=alice).status_code == status
+    off = client.put("/api/settings/reranking", json={"provider": "none"}, headers=alice)
+    assert off.json()["provider"] == "none"

@@ -33,10 +33,17 @@ class ProviderSpec:
     embedding_model: str | None = None
     # NVIDIA's retrieval embedders need to know whether they embed a passage or a query.
     embedding_input_type: bool = False
+    # Suggested reranking model (see llm.rerank), with the same None / "" meaning.
+    rerank_model: str | None = None
+    rerank_format: Literal["cohere", "nvidia"] = "cohere"
 
     @property
     def supports_embeddings(self) -> bool:
         return self.embedding_model is not None
+
+    @property
+    def supports_reranking(self) -> bool:
+        return self.rerank_model is not None
 
 
 PROVIDERS: dict[str, ProviderSpec] = {
@@ -54,10 +61,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ProviderSpec(
             "nvidia", "NVIDIA NIM", "openai_compatible", "meta/llama-3.1-70b-instruct", base_url="https://integrate.api.nvidia.com/v1",
             embedding_model="nvidia/nv-embedqa-e5-v5", embedding_input_type=True,
+            rerank_model="nvidia/llama-3.2-nv-rerankqa-1b-v2", rerank_format="nvidia",
         ),
         ProviderSpec(
             "together", "Together AI", "openai_compatible", "meta-llama/Llama-3.3-70B-Instruct-Turbo", base_url="https://api.together.xyz/v1",
-            embedding_model="BAAI/bge-base-en-v1.5",
+            embedding_model="BAAI/bge-base-en-v1.5", rerank_model="Salesforce/Llama-Rank-V1",
         ),
         ProviderSpec(
             "mistral", "Mistral AI", "openai_compatible", "mistral-small-latest", base_url="https://api.mistral.ai/v1",
@@ -65,7 +73,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ),
         ProviderSpec(
             "custom", "OpenAI-compatible (self-hosted)", "openai_compatible", "",
-            stream_usage_option=False, requires_base_url=True, embedding_model="",
+            stream_usage_option=False, requires_base_url=True, embedding_model="", rerank_model="",
         ),
     ]
 }

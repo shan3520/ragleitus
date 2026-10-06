@@ -29,6 +29,7 @@ class Variant(BaseModel):
     model: str | None = Field(default=None, max_length=255, description="The provider's default model if left out")
     retrieval: Literal["hybrid", "dense", "keyword"] = "hybrid"
     top_k: int | None = Field(default=None, ge=1, le=experiment_service.MAX_TOP_K)
+    rerank: bool = Field(default=False, description="Rerank the passages with your reranker (Settings)")
 
 
 class ExperimentCreate(BaseModel):

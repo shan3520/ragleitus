@@ -92,6 +92,25 @@ export interface EmbeddingSettings extends EmbeddingRef {
   indexing: number;
 }
 
+export interface RerankOption {
+  /** "none" (off), "local" (the server's own model) or a provider name. */
+  provider: string;
+  label: string;
+  /** "" when the user has to name the model (self-hosted servers), or for "none". */
+  default_model: string;
+  has_key: boolean;
+}
+
+export interface RerankSettings {
+  provider: string;
+  model: string;
+  /** The chosen provider's key has been deleted since. */
+  key_missing: boolean;
+  /** How many retrieved passages the reranker scores. */
+  candidates: number;
+  options: RerankOption[];
+}
+
 export interface DocumentAccepted {
   id: number;
   title: string;
@@ -151,6 +170,8 @@ export interface ExperimentVariantInput {
   model?: string;
   retrieval?: RetrievalStrategy;
   top_k?: number;
+  /** Rerank the passages with the user's reranker (Settings). */
+  rerank?: boolean;
 }
 
 export interface ExperimentVariant {
@@ -162,6 +183,7 @@ export interface ExperimentVariant {
   model: string;
   retrieval: RetrievalStrategy;
   top_k: number;
+  rerank: boolean;
 }
 
 export type ExperimentStatus = "draft" | "queued" | "running" | "completed" | "failed";
@@ -526,6 +548,9 @@ export const api = {
   reindexDocument: (id: number) => request<DocumentAccepted>(`/api/documents/${id}/reindex`, { method: "POST" }),
   deleteDocument: (id: number) => request<void>(`/api/documents/${id}`, { method: "DELETE" }),
 
+  rerankSettings: () => request<RerankSettings>("/api/settings/reranking"),
+  saveRerankSettings: (body: { provider: string; model?: string }) =>
+    request<RerankSettings>("/api/settings/reranking", { method: "PUT", body: json(body) }),
   embeddingSettings: () => request<EmbeddingSettings>("/api/settings/embeddings"),
   saveEmbeddingSettings: (body: { provider: string; model?: string }) =>
     request<EmbeddingSettings>("/api/settings/embeddings", { method: "PUT", body: json(body) }),

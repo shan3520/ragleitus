@@ -3,7 +3,7 @@
     retrieve -> assemble_prompt -> generate -> evaluate -> record
 
 - retrieve: the variant's retrieval strategy and top_k over the experiment's
-  documents (see retrieval.retrieve);
+  documents, reranked if the variant says so (see retrieval.retrieve);
 - assemble_prompt: the variant's prompt (built-in or a library version)
   around the numbered passages, as in chat;
 - generate: the variant's provider and model, with the user's key;
@@ -13,7 +13,9 @@
 - record: one ExperimentResult row.
 
 A failure in retrieve or generate skips straight to record, which stores the
-error; a failed evaluation keeps the answer. The run goes on with the next
+error; a failed evaluation keeps the answer. Retrieval that ran, but not as
+the variant says (its reranker or an embedding model could not be used), is
+noted in the result's error too, so it never passes for the real thing. The run goes on with the next
 question either way, so one bad call never loses the rest of the run.
 
 The run claims the experiment with a token, like indexing does: if the
@@ -50,9 +52,9 @@ from app.services import telemetry
 from app.services.chat_service import build_prompt, extract_citations, prompt_template
 from app.services.llm import ProviderError, ProviderFactory, Usage, complete, create_provider, get_spec
 from app.services.llm.pricing import estimate_cost_usd
-from app.services.llm.retry import with_retries
+from app.services.llm.retry import RetryingReranker, with_retries
 from app.services.provider_key import MissingProviderKeyError, create_user_provider
-from app.services import embedding_service, rag_evaluation
+from app.services import embedding_service, rag_evaluation, reranking
 from app.services.evaluators import EvaluationError, EvaluationInput
 from app.services.retrieval import RetrievedChunk, retrieve
 from app.services.rouge_scoring import score_rouge_l
@@ -73,6 +75,9 @@ class CaseState(TypedDict, total=False):
     latency_ms: float
     scores: dict
     error: str
+    # Retrieval ran, but not as the variant says (a reranker or an embedding
+    # model could not be used): stored with the result as its error.
+    warnings: list[str]
 
 
 class _Superseded(Exception):
@@ -120,17 +125,23 @@ def build_graph(
             )
         return templates[variant.id]
 
+    def retrying_reranker(session_, user_id_, choice):
+        # Concurrent runs can hit a rerank API's rate limit too.
+        return RetryingReranker(reranking.build_reranker(session_, user_id_, choice))
+
     def retrieve_node(state: CaseState) -> dict:
         variant = variants[state["variant_id"]]
+        warnings: list[str] = []
         try:
             sources = retriever(
                 session, user_id, state["question"], k=variant.top_k,
-                document_ids=experiment.document_ids, strategy=variant.retrieval,
+                document_ids=experiment.document_ids, strategy=variant.retrieval, rerank=variant.rerank,
+                warnings=warnings, reranker_factory=retrying_reranker,
             )
         except Exception as exc:
             logger.exception("Experiment retrieval failed", extra={"experiment_id": experiment.id})
             return {"error": f"Retrieval failed: {type(exc).__name__}"}
-        return {"sources": sources}
+        return {"sources": sources, "warnings": warnings}
 
     def assemble_prompt_node(state: CaseState) -> dict:
         variant = variants[state["variant_id"]]
@@ -240,7 +251,7 @@ def build_graph(
                 hallucination=scores.get("hallucination"),
                 rouge_l=scores.get("rouge_l"),
                 judge_rationale=scores.get("judge_rationale"),
-                error=(state.get("error") or "")[:2000] or None,
+                error="\n".join(filter(None, [*state.get("warnings", []), state.get("error")]))[:2000] or None,
                 created_at=_now(),
             )
         )
@@ -297,7 +308,7 @@ def _invoke(graph, experiment: Experiment, case_index: int, case: dict, variant:
     with tracing.span(
         "experiment.case", experiment__id=experiment.id, experiment__case=case_index,
         experiment__variant=variant.label, gen_ai__system=variant.provider,
-        gen_ai__request__model=variant.model, retrieval__strategy=variant.retrieval,
+        gen_ai__request__model=variant.model, retrieval__strategy=variant.retrieval, retrieval__rerank=variant.rerank,
         user__id=str(experiment.user_id),
     ):
         graph.invoke(

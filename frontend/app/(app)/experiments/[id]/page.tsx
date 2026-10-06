@@ -49,7 +49,8 @@ function VariantTable({ comparison }: { comparison: ExperimentComparison }) {
                   {v.label}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {v.prompt_label} · {v.model} · {RETRIEVAL[v.retrieval]}, {v.top_k} passages
+                  {v.prompt_label} · {v.model} · {RETRIEVAL[v.retrieval]}
+                  {v.rerank ? ", reranked" : ""}, {v.top_k} passages
                 </p>
               </TD>
               {metrics.map((m) => {

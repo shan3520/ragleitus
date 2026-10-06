@@ -55,7 +55,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
             embedding_model="text-embedding-3-small",
         ),
         ProviderSpec("anthropic", "Anthropic", "anthropic", "claude-opus-5-5", key_pattern=re.compile(r"^sk-ant-[A-Za-z0-9_\-]{8,}$")),
-        ProviderSpec("gemini", "Google Gemini", "gemini", "gemini-2.5-flash", base_url=GEMINI_BASE_URL, key_pattern=re.compile(r"^AIza[0-9A-Za-z\-_]{20,}$"), embedding_model="gemini-embedding-001"),
+        # Standard keys start AIza; AI Studio has issued "auth keys" (AQ.) since 28 May 2026.
+        ProviderSpec(
+            "gemini", "Google Gemini", "gemini", "gemini-2.5-flash", base_url=GEMINI_BASE_URL,
+            key_pattern=re.compile(r"^(AIza[0-9A-Za-z\-_]{20,}|AQ\.[0-9A-Za-z\-_.]{20,})$"), embedding_model="gemini-embedding-001",
+        ),
         ProviderSpec("groq", "Groq", "openai_compatible", "openai/gpt-oss-120b", base_url="https://api.groq.com/openai/v1"),
         ProviderSpec("openrouter", "OpenRouter", "openai_compatible", "openai/gpt-4o-mini", base_url="https://openrouter.ai/api/v1"),
         ProviderSpec(

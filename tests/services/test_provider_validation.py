@@ -16,6 +16,11 @@ def test_provider_key_format_rejects_invalid_values():
 def test_provider_key_format_accepts_known_shapes():
     assert is_valid_provider_key_format("openai", "sk-proj-abc12345")
     assert is_valid_provider_key_format("anthropic", "sk-ant-api03-abcdefgh")
+    # Gemini: standard keys, and the "auth keys" AI Studio has issued since May 2026.
+    assert is_valid_provider_key_format("gemini", "AIzaSyFakeFakeFakeFakeFakeFakeFake00")
+    assert is_valid_provider_key_format("gemini", "AQ.AbFakeFakeFakeFakeFake-Fake_Fake.Fake00")
+    assert not is_valid_provider_key_format("gemini", "AQ.short")
+    assert not is_valid_provider_key_format("gemini", "AQ.Fake Fake Fake Fake Fake Fake")
     # Providers without a published key format accept any non-empty key.
     assert is_valid_provider_key_format("groq", "gsk_anything")
 

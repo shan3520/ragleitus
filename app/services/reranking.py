@@ -183,7 +183,7 @@ def save_choice(
         reranker = None
         try:
             reranker = (factory or build_reranker)(session, user_id, choice)
-            rerank(reranker, "RAGForge reranking check", ["A passage to score.", "Another passage."])
+            rerank(reranker, "ragleitus reranking check", ["A passage to score.", "Another passage."])
         except RerankUnavailable as exc:
             raise RerankSettingsError(str(exc)) from None
         except ProviderError as exc:

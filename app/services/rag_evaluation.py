@@ -9,7 +9,7 @@ answer was given, the answer, and optionally a reference answer, and scores:
 - context_recall: share of the reference answer's facts found in the passages
   (only with a reference answer)
 
-The evaluator is RAGForge's own LLM judge (one call), Ragas or DeepEval (see
+The evaluator is ragleitus's own LLM judge (one call), Ragas or DeepEval (see
 app.services.evaluators); all run on the user's own provider key, and every
 call they make is recorded in telemetry. Hallucination is 1 - faithfulness
 (DeepEval measures it directly). Two lexical baselines that need no model

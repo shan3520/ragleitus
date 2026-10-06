@@ -4,7 +4,7 @@ Revision ID: 0028_evaluators
 Revises: 0027_prompt_library_experiments
 Create Date: 2026-10-06 12:00:00.000000
 
-Answers can be scored by RAGForge's own judge, Ragas or DeepEval. Records
+Answers can be scored by ragleitus's own judge, Ragas or DeepEval. Records
 which one produced each evaluation (and which one an experiment uses), and
 lets a judge score be null when the evaluator could not score that metric.
 Existing rows were all produced by the built-in judge.

@@ -122,7 +122,7 @@ redis.call('PEXPIRE', KEYS[1], math.ceil((capacity - tokens) / rate * 1000) + 10
 return {allowed, tostring(tokens)}
 """
 
-KEY_PREFIX = "ragforge:rl"
+KEY_PREFIX = "ragleitus:rl"
 
 
 class RedisRateLimiter:

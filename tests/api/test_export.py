@@ -21,7 +21,7 @@ def test_export_metrics_as_json_and_csv():
     response = client.get("/api/export/metrics?format=csv", headers=headers)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
-    assert 'attachment; filename="ragforge-metrics-' in response.headers["content-disposition"]
+    assert 'attachment; filename="ragleitus-metrics-' in response.headers["content-disposition"]
     rows = list(csv.DictReader(io.StringIO(response.text)))
     assert {"section": "documents", "key": "ready", "metric": "count", "value": "1"} in rows
 

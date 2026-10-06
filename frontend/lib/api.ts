@@ -1,5 +1,5 @@
 /**
- * Typed client for the RAGForge API.
+ * Typed client for the ragleitus API.
  *
  * Requests go to `/backend/...` on the same origin; the route handler in
  * `app/backend/[...path]/route.ts` forwards them to the FastAPI server.
@@ -373,7 +373,7 @@ export interface SubsystemHealth {
 
 // ---------------------------------------------------------------- token
 
-const TOKEN_KEY = "ragforge.token";
+const TOKEN_KEY = "ragleitus.token";
 
 /** Where the access token lives. localStorage can throw (private mode, blocked storage). */
 export const tokenStore = {

@@ -29,7 +29,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-tracer = trace.get_tracer("ragforge")
+tracer = trace.get_tracer("ragleitus")
 
 _provider: TracerProvider | None = None
 
@@ -93,7 +93,7 @@ class _ProxyTracer:
 
 
 def _tracer():
-    return _ProxyTracer.provider.get_tracer("ragforge") if _ProxyTracer.provider else tracer
+    return _ProxyTracer.provider.get_tracer("ragleitus") if _ProxyTracer.provider else tracer
 
 
 def tracing_enabled() -> bool:

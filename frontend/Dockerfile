@@ -1,7 +1,7 @@
-# RAGForge web UI. The API address is read at runtime from API_URL, so one
+# ragleitus web UI. The API address is read at runtime from API_URL, so one
 # image works against any backend.
-#   docker build -t ragforge-web frontend
-#   docker run -p 3000:3000 -e API_URL=http://host.docker.internal:8000 ragforge-web
+#   docker build -t ragleitus-web frontend
+#   docker run -p 3000:3000 -e API_URL=http://host.docker.internal:8000 ragleitus-web
 
 FROM node:22-alpine AS deps
 WORKDIR /app

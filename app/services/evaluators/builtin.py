@@ -1,4 +1,4 @@
-"""RAGForge's own LLM judge: one call that scores all four metrics."""
+"""ragleitus's own LLM judge: one call that scores all four metrics."""
 
 from __future__ import annotations
 

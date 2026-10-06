@@ -1,4 +1,4 @@
-# RAGForge Product Specification
+# ragleitus Product Specification
 
 > Purpose: Build a production-quality AI engineering platform for
 > Retrieval-Augmented Generation (RAG), multi-provider LLM
@@ -10,7 +10,7 @@
 
 # 1. Product Vision
 
-RAGForge is **not** a PDF chatbot. It is an AI engineering workspace
+ragleitus is **not** a PDF chatbot. It is an AI engineering workspace
 similar in spirit to LangSmith + Open WebUI + RAG Studio.
 
 Primary goals: - Upload and manage knowledge bases. - Chat with

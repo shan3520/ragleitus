@@ -39,7 +39,7 @@ from app.services.prompt_template import format_prompt
 from app.services.provider_key import MissingProviderKeyError, create_user_provider, list_provider_keys
 from app.services.retrieval import RetrievedChunk, retrieve
 
-SYSTEM_PROMPT = """You are RAGForge, an assistant that answers questions using the numbered context passages below, taken from the user's documents.
+SYSTEM_PROMPT = """You are ragleitus, an assistant that answers questions using the numbered context passages below, taken from the user's documents.
 
 Rules:
 - Base your answer only on the passages. Do not use outside knowledge for facts.

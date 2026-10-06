@@ -2,7 +2,7 @@
 //
 // Chat answers quote the first retrieved passage and cite it as [1]; judge
 // prompts get fixed JSON scores, and prompts that carry a JSON schema (Ragas
-// and DeepEval through RAGForge's adapters) get an instance of it.
+// and DeepEval through ragleitus's adapters) get an instance of it.
 // Responses stream as SSE like OpenAI's.
 // /embeddings returns word-hashing vectors, so texts that share words are close.
 // /rerank scores each document by the share of the query's words it contains.

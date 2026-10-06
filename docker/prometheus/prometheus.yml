@@ -1,4 +1,4 @@
-# Scrapes RAGForge's metrics port (METRICS_PORT, 9464 in docker-compose.yml)
+# Scrapes ragleitus's metrics port (METRICS_PORT, 9464 in docker-compose.yml)
 # on the internal network. DNS discovery finds every worker when scaled
 # with `docker compose up --scale worker=3`.
 global:
@@ -14,12 +14,12 @@ alerting:
         - targets: ["alertmanager:9093"]
 
 scrape_configs:
-  - job_name: ragforge-api
+  - job_name: ragleitus-api
     dns_sd_configs:
       - names: ["api"]
         type: A
         port: 9464
-  - job_name: ragforge-worker
+  - job_name: ragleitus-worker
     dns_sd_configs:
       - names: ["worker"]
         type: A

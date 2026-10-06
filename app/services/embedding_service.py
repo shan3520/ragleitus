@@ -283,7 +283,7 @@ def save_choice(
         embedder = None
         try:
             embedder = (factory or build_embedder)(session, user_id, choice)
-            embedder.embed_query("RAGForge embedding check")
+            embedder.embed_query("ragleitus embedding check")
         except EmbeddingUnavailable as exc:
             raise EmbeddingSettingsError(str(exc)) from None
         except ProviderError as exc:

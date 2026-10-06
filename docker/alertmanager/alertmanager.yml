@@ -1,4 +1,4 @@
-# Who hears about RAGForge's alerts (docker/prometheus/alerts.yml).
+# Who hears about ragleitus's alerts (docker/prometheus/alerts.yml).
 #
 # Out of the box alerts are only collected: see them in Alertmanager
 # (http://localhost:9093) and on the Grafana dashboard. To be notified, add a
@@ -7,10 +7,10 @@
 #   receivers:
 #     - name: team
 #       webhook_configs:              # any HTTP endpoint (a chat bot, an incident tool)
-#         - url: https://hooks.example.com/ragforge
+#         - url: https://hooks.example.com/ragleitus
 #       slack_configs:
 #         - api_url: https://hooks.slack.com/services/T000/B000/XXXX
-#           channel: "#ragforge"
+#           channel: "#ragleitus"
 #           send_resolved: true
 #       email_configs:
 #         - to: oncall@example.com

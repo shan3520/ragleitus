@@ -1,7 +1,7 @@
 from app.services.bm25 import tokenize, score_bm25
 
 def test_tokenize():
-    assert tokenize("Hello World! RAGForge 123.") == ["hello", "world", "ragforge", "123"]
+    assert tokenize("Hello World! ragleitus 123.") == ["hello", "world", "ragleitus", "123"]
     assert tokenize("") == []
 
 def test_score_bm25():

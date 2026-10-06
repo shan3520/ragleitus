@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-WORKDIR /srv/ragforge
+WORKDIR /srv/ragleitus
 
 # Install dependencies first so code changes don't reinstall them. The code
 # itself runs from this directory (uvicorn and alembic put it on sys.path).
@@ -20,12 +20,12 @@ COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN useradd --create-home --uid 1000 ragforge \
+RUN useradd --create-home --uid 1000 ragleitus \
     && mkdir -p /data/models \
-    && chown -R ragforge /data \
+    && chown -R ragleitus /data \
     && chmod +x /usr/local/bin/entrypoint.sh
 
-USER ragforge
+USER ragleitus
 # The embedding model is downloaded here on first use; mount a volume to keep it.
 ENV EMBEDDING_CACHE_DIR=/data/models
 EXPOSE 8000

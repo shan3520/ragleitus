@@ -18,7 +18,7 @@ Only the latest commit on `main` receives security fixes.
 
 ## What is in scope
 
-RAGForge stores other people's LLM provider keys and documents, so these are
+ragleitus stores other people's LLM provider keys and documents, so these are
 the reports that matter most:
 
 - **Provider keys:** reading another user's key, or reading a key in
@@ -43,7 +43,7 @@ the reports that matter most:
   lets users point the server at internal addresses.
 - Weak values chosen for `JWT_SECRET`, `PROVIDER_KEY_SECRET` or
   `POSTGRES_PASSWORD`.
-- Vulnerabilities in a dependency with no demonstrated impact on RAGForge.
+- Vulnerabilities in a dependency with no demonstrated impact on ragleitus.
   Report those to the dependency.
 - What an LLM provider does with the prompts it is sent, including prompt
   injection through an uploaded document, unless it leads to one of the

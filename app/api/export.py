@@ -37,5 +37,5 @@ def export_metrics(
     return Response(
         buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="ragforge-metrics-{date.today().isoformat()}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="ragleitus-metrics-{date.today().isoformat()}.csv"'},
     )

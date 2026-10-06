@@ -13,12 +13,12 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "ragforge"
+    PROJECT_NAME: str = "ragleitus"
     VERSION: str = "0.1.0"
     debug: bool = False
 
     # Persistence
-    database_url: str = "sqlite:///./ragforge.db"
+    database_url: str = "sqlite:///./ragleitus.db"
 
     # Security
     # HS256 needs at least 32 bytes of key (RFC 7518 §3.2).
@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     metrics_port: int = 0
     # OpenTelemetry traces over OTLP/HTTP (e.g. http://jaeger:4318). Empty: off.
     otel_exporter_otlp_endpoint: str = ""
-    otel_service_name: str = "ragforge"
+    otel_service_name: str = "ragleitus"
     # Traces to Langfuse (Cloud or self-hosted) when both keys are set.
     langfuse_public_key: SecretStr = SecretStr("")
     langfuse_secret_key: SecretStr = SecretStr("")

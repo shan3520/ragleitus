@@ -8,7 +8,7 @@ export interface Step {
   done: boolean;
 }
 
-/** The three things a new user does before RAGForge is useful, in order. */
+/** The three things a new user does before ragleitus is useful, in order. */
 export function gettingStartedSteps(input: {
   keys: ProviderKey[];
   documents: DocumentSummary[];

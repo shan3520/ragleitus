@@ -1,4 +1,4 @@
-# RAGForge
+# ragleitus
 
 A workspace for Retrieval-Augmented Generation. Upload documents, chat with them
 using the LLM provider of your choice (bring your own key), get answers with
@@ -21,7 +21,7 @@ that remain, are in [Assumptions and limits](#assumptions-and-limits).
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day, with CSV/JSON export. |
 | Observability | Prometheus metrics, OpenTelemetry traces (to any OTLP backend and to Langfuse), JSON logs with trace ids, and an optional Prometheus + Alertmanager + Grafana + Jaeger stack with alert rules and a ready-made dashboard. |
 | Prompts and experiments | A versioned prompt library you can chat with, and experiments that answer the same questions with several prompts, models and retrieval strategies and compare their quality, latency and cost (run as a LangGraph pipeline), with CSV/JSON export. |
-| Evaluation | Scoring of any answer with RAGForge's own LLM judge, Ragas or DeepEval (on your own provider): faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
+| Evaluation | Scoring of any answer with ragleitus's own LLM judge, Ragas or DeepEval (on your own provider): faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
 
 ## Quick start with Docker Compose
 
@@ -45,7 +45,7 @@ For a slimmer image without them (870 MB), build with
 `.env`; the app then offers only its built-in judge.
 
 To add monitoring, start the `observability` profile:
-`docker compose --profile observability up --build`. Grafana (with the RAGForge
+`docker compose --profile observability up --build`. Grafana (with the ragleitus
 dashboard) is at <http://localhost:3001>, Prometheus at <http://localhost:9090>,
 Alertmanager at <http://localhost:9093> and Jaeger at <http://localhost:16686>;
 see [Observability](#observability).
@@ -295,7 +295,7 @@ flowchart LR
 - **Evaluators.** An answer (in chat or in an experiment) is scored by one of
   three evaluators (`app/services/evaluators`), all judged by the user's own
   provider and model and all reporting the same metrics:
-  - `builtin`: RAGForge's LLM judge, one call for all four metrics.
+  - `builtin`: ragleitus's LLM judge, one call for all four metrics.
   - `ragas`: Ragas's faithfulness, answer relevancy (which also embeds, with the
     user's embedding model), context precision and context recall.
   - `deepeval`: DeepEval's faithfulness, answer relevancy, contextual
@@ -360,17 +360,17 @@ flowchart LR
 
     | Alert | Fires when |
     |---|---|
-    | `RagforgeApiDown`, `RagforgeWorkerDown` | no api (or worker) has answered a scrape for 2 minutes |
-    | `RagforgeHighErrorRate` | over 5% of requests get a 5xx for 10 minutes |
-    | `RagforgeSlowRequests` | a route's p95 is over 5 s for 10 minutes (routes that wait on an LLM excepted) |
-    | `RagforgeLlmErrors` | over 20% of calls to a provider fail for 10 minutes |
-    | `RagforgeIndexingFailures` | a document failed to index in the last 15 minutes |
-    | `RagforgeIndexingStalled` | documents are waiting and none finished in 15 minutes |
+    | `RagleitusApiDown`, `RagleitusWorkerDown` | no api (or worker) has answered a scrape for 2 minutes |
+    | `RagleitusHighErrorRate` | over 5% of requests get a 5xx for 10 minutes |
+    | `RagleitusSlowRequests` | a route's p95 is over 5 s for 10 minutes (routes that wait on an LLM excepted) |
+    | `RagleitusLlmErrors` | over 20% of calls to a provider fail for 10 minutes |
+    | `RagleitusIndexingFailures` | a document failed to index in the last 15 minutes |
+    | `RagleitusIndexingStalled` | documents are waiting and none finished in 15 minutes |
 
   - Alertmanager (<http://localhost:9093>), which collects the alerts. To be
     notified (webhook, Slack, e-mail…), add a receiver to
     `docker/alertmanager/alertmanager.yml`; the file has examples.
-  - Grafana, with Prometheus and Alertmanager data sources and a RAGForge
+  - Grafana, with Prometheus and Alertmanager data sources and a ragleitus
     dashboard: firing alerts, requests, errors, latency, LLM calls, cost,
     tokens and time to first token per model, indexing, retrieval and
     reranking. Grafana's Alerting page lists the rules.
@@ -476,7 +476,7 @@ A few tests also run against a real PostgreSQL when `TEST_POSTGRES_URL` points
 at a database they may wipe; without it they are skipped:
 
 ```bash
-docker run -d --name ragforge-test-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=pw postgres:16-alpine
+docker run -d --name ragleitus-test-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=pw postgres:16-alpine
 TEST_POSTGRES_URL=postgresql+psycopg://postgres:pw@127.0.0.1:55432/postgres pytest -q
 ```
 
@@ -510,7 +510,7 @@ tests/live/test_evaluators.py`) or another provider (`LIVE_EVALUATOR_PROVIDER`).
 OpenRouter's default `openai/gpt-4o-mini` needs credits; a free account can
 test with a `:free` model through `LIVE_OPENROUTER_MODEL`.
 A Mistral plan may allow no requests at all to `mistral-small-latest` (a 429
-with `x-ratelimit-limit-req-minute: 0`, which RAGForge reports and does not
+with `x-ratelimit-limit-req-minute: 0`, which ragleitus reports and does not
 retry); test with `LIVE_MISTRAL_MODEL=ministral-8b-latest`.
 
 Schema changes go through Alembic:
@@ -554,7 +554,7 @@ container reach the stub on the host:
 
 ## Assumptions and limits
 
-The spec leaves these open; this is what RAGForge assumes:
+The spec leaves these open; this is what ragleitus assumes:
 
 - **Accounts are private.** Every document, key, prompt, experiment and metric
   belongs to one user; there are no teams or shared workspaces.

@@ -1,37 +1,37 @@
-# Alert rules for RAGForge, loaded by prometheus.yml. Firing alerts go to
+# Alert rules for ragleitus, loaded by prometheus.yml. Firing alerts go to
 # Alertmanager (docker/alertmanager/alertmanager.yml decides who hears about
 # them) and show on the Grafana dashboard. Every rule only uses metrics that
 # app/core/metrics.py defines (tests/test_monitoring_config.py checks).
 groups:
-  - name: ragforge
+  - name: ragleitus
     rules:
-      - alert: RagforgeApiDown
+      - alert: RagleitusApiDown
         # No api target answering, including when none is running at all.
-        expr: (sum(up{job="ragforge-api"}) or vector(0)) == 0
+        expr: (sum(up{job="ragleitus-api"}) or vector(0)) == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: The RAGForge API is down
+          summary: The ragleitus API is down
           description: Prometheus has not been able to scrape any api container for 2 minutes.
 
-      - alert: RagforgeWorkerDown
-        expr: (sum(up{job="ragforge-worker"}) or vector(0)) == 0
+      - alert: RagleitusWorkerDown
+        expr: (sum(up{job="ragleitus-worker"}) or vector(0)) == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: No RAGForge worker is running
+          summary: No ragleitus worker is running
           description: >-
             Prometheus has not been able to scrape any worker for 2 minutes.
             Uploaded documents and experiments wait until a worker is back.
 
-      - alert: RagforgeHighErrorRate
+      - alert: RagleitusHighErrorRate
         # 5xx responses as a share of all requests, once there is some traffic.
         expr: |
-          sum(rate(ragforge_http_requests_total{status=~"5.."}[5m]))
-            / sum(rate(ragforge_http_requests_total[5m])) > 0.05
-          and sum(rate(ragforge_http_requests_total[5m])) > 0.05
+          sum(rate(ragleitus_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(ragleitus_http_requests_total[5m])) > 0.05
+          and sum(rate(ragleitus_http_requests_total[5m])) > 0.05
         for: 10m
         labels:
           severity: warning
@@ -39,11 +39,11 @@ groups:
           summary: More than 5% of API requests fail
           description: '{{ $value | humanizePercentage }} of requests answered with a 5xx error over the last 5 minutes.'
 
-      - alert: RagforgeSlowRequests
+      - alert: RagleitusSlowRequests
         # Routes that wait on an LLM (answers without streaming, evaluations,
         # key and settings checks) are left out: their time is the provider's.
         expr: |
-          histogram_quantile(0.95, sum by (le, route) (rate(ragforge_http_request_duration_seconds_bucket{
+          histogram_quantile(0.95, sum by (le, route) (rate(ragleitus_http_request_duration_seconds_bucket{
             route!~"/api/conversations/.*/messages|/api/evaluations.*|/api/provider-keys/.*/validate|/api/settings/.*"
           }[5m]))) > 5
         for: 10m
@@ -53,11 +53,11 @@ groups:
           summary: 'Slow API route: {{ $labels.route }}'
           description: 'The 95th percentile of {{ $labels.route }} has been {{ $value | humanizeDuration }} for 10 minutes.'
 
-      - alert: RagforgeLlmErrors
+      - alert: RagleitusLlmErrors
         expr: |
-          sum by (provider) (rate(ragforge_llm_calls_total{status="error"}[10m]))
-            / sum by (provider) (rate(ragforge_llm_calls_total[10m])) > 0.2
-          and sum by (provider) (rate(ragforge_llm_calls_total[10m])) > 0.01
+          sum by (provider) (rate(ragleitus_llm_calls_total{status="error"}[10m]))
+            / sum by (provider) (rate(ragleitus_llm_calls_total[10m])) > 0.2
+          and sum by (provider) (rate(ragleitus_llm_calls_total[10m])) > 0.01
         for: 10m
         labels:
           severity: warning
@@ -67,19 +67,19 @@ groups:
             {{ $value | humanizePercentage }} of calls to {{ $labels.provider }} failed over the last 10 minutes
             (bad keys, rate limits or an outage; the Telemetry page shows the errors).
 
-      - alert: RagforgeIndexingFailures
-        expr: sum(increase(ragforge_indexing_total{outcome="failed"}[15m])) > 0
+      - alert: RagleitusIndexingFailures
+        expr: sum(increase(ragleitus_indexing_total{outcome="failed"}[15m])) > 0
         labels:
           severity: warning
         annotations:
           summary: Documents failed to index
           description: '{{ $value | humanize }} documents failed to index in the last 15 minutes; their errors are on the Documents page.'
 
-      - alert: RagforgeIndexingStalled
+      - alert: RagleitusIndexingStalled
         # Documents are waiting, and none has finished indexing for 15 minutes.
         expr: |
-          max(ragforge_documents_queued{status=~"pending|indexing"}) > 0
-          and (sum(increase(ragforge_indexing_total[15m])) or vector(0)) == 0
+          max(ragleitus_documents_queued{status=~"pending|indexing"}) > 0
+          and (sum(increase(ragleitus_indexing_total[15m])) or vector(0)) == 0
         for: 5m
         labels:
           severity: warning

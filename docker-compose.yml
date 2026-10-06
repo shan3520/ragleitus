@@ -45,7 +45,12 @@ services:
       retries: 20
 
   api:
-    build: .
+    build: &backend-build
+      context: .
+      args:
+        # Extras built into the image: the evaluators Ragas and DeepEval by
+        # default. EVALUATOR_EXTRAS= (empty) builds a slimmer image without them.
+        EXTRAS: ${EVALUATOR_EXTRAS-ragas,deepeval}
     env_file: .env
     environment: &backend-env
       DATABASE_URL: postgresql+psycopg://ragforge:${POSTGRES_PASSWORD}@postgres:5432/ragforge
@@ -80,7 +85,7 @@ services:
   # Starts after the api, which has applied the migrations by then. Run more
   # copies with `docker compose up --scale worker=3`.
   worker:
-    build: .
+    build: *backend-build
     env_file: .env
     environment: *backend-env
     command: ["celery", "-A", "app.worker", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-2}"]

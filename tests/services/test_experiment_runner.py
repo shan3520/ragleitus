@@ -16,7 +16,7 @@ from app.models.experiment import Experiment, ExperimentResult
 from app.models.telemetry_event import TelemetryEvent
 from app.services import experiment_runner, experiment_service, ingestion, prompt_service
 from app.services.embeddings import FakeEmbedder
-from app.services.llm import ProviderError
+from app.services.llm import ProviderError, StreamEvent
 from app.services.experiment_service import ExperimentBusyError, ExperimentError
 from app.services.provider_key import encrypt_key, save_provider_key
 from app.services.retrieval import retrieve
@@ -127,6 +127,27 @@ def test_a_run_answers_every_question_with_every_variant_and_scores_it(env):
     # Every call is in telemetry.
     operations = sorted(op for (op,) in session.query(TelemetryEvent.operation))
     assert operations == ["evaluation"] * 4 + ["experiment"] * 4
+
+
+class _FullWidthCiter(ScriptedProvider):
+    """Cites 【1】 instead of [1], as gpt-oss-120b on Groq does."""
+
+    async def stream(self, messages, model, max_tokens):
+        async for event in super().stream(messages, model, max_tokens):
+            if event.kind == "delta":
+                event = StreamEvent(kind="delta", text=event.text.replace("[1]", "【1】"))
+            yield event
+
+
+def test_full_width_citations_are_stored_as_ordinary_ones(env):
+    session, user, run = env
+    experiment = _create(session, user)
+
+    run(experiment.id, provider=_FullWidthCiter())
+
+    first = session.query(ExperimentResult).order_by(ExperimentResult.case_index, ExperimentResult.variant_id).first()
+    assert first.answer.endswith("expired. [1]"), first.answer
+    assert first.citations[0]["document_title"] == "errors"
 
 
 def test_compare_export_and_report(env):

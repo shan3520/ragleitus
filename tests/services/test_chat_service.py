@@ -8,7 +8,7 @@ from app.models import Base
 from app.models.conversation import Message
 from app.models.telemetry_event import TelemetryEvent
 from app.services import chat_service
-from app.services.llm import ProviderError, Usage
+from app.services.llm import ProviderError, StreamEvent, Usage
 from app.services.provider_key import encrypt_key, save_provider_key
 from app.services.retrieval import RetrievedChunk
 from tests.fakes import FakeFactory, FakeProvider
@@ -48,6 +48,27 @@ def test_extract_citations_resolves_markers_in_order_and_ignores_invalid_ones():
     assert [c["number"] for c in cited] == [2, 1]
     assert cited[0]["document_title"] == "Policy"
     assert cited[1]["page_number"] == 2
+
+
+def test_full_width_citation_markers_are_read_as_ordinary_ones():
+    # As gpt-oss-120b on Groq writes them.
+    answer = "Error E‑4711 indicates that the upstream certificate has expired【1】, see also 【 1, 2 】."
+    assert chat_service.normalize_citations(answer) == (
+        "Error E‑4711 indicates that the upstream certificate has expired[1], see also [1, 2]."
+    )
+    assert [c["number"] for c in chat_service.extract_citations(answer, SOURCES)] == [1, 2]
+    assert chat_service.normalize_citations("【note】 and 【】 stay as written") == "【note】 and 【】 stay as written"
+
+
+def test_a_citation_stream_rewrites_markers_split_across_deltas():
+    stream = chat_service.CitationStream()
+    out = [stream.feed(t) for t in ["It expired", "【", "1", "】.", " Also 【2", ",3】", " and 【no", "te】"]]
+    assert "".join(out) + stream.flush() == "It expired[1]. Also [2,3] and 【note】"
+    assert out[1:3] == ["", ""]  # held back until the marker closed
+    # A marker the answer ends in the middle of is not lost.
+    stream = chat_service.CitationStream()
+    assert stream.feed("cut off 【1") == "cut off "
+    assert stream.flush() == "【1"
 
 
 def test_prompt_numbers_passages_and_includes_history():
@@ -138,6 +159,41 @@ def test_full_turn_saves_answer_citations_and_telemetry(env):
     # The next turn sends the previous exchange as history.
     turn2 = chat_service.prepare_turn(session, user_id, conversation.id, "And sick days?", factory=factory, retriever=lambda *a, **k: [])
     assert [m.content for m in turn2.prompt[1:]] == ["How much leave?", "Leave is 25 days [1].", "And sick days?"]
+
+
+class _DeltaProvider(FakeProvider):
+    """Streams exactly the deltas given, as a real provider may split them."""
+
+    def __init__(self, deltas: list[str], **kwargs):
+        super().__init__(reply="".join(deltas), **kwargs)
+        self.deltas = deltas
+
+    async def stream(self, messages, model, max_tokens):
+        for text in self.deltas:
+            yield StreamEvent(kind="delta", text=text)
+        yield StreamEvent(kind="done", usage=self.usage, model=model, finish_reason="stop")
+
+
+def test_a_turn_streams_and_stores_full_width_citations_as_ordinary_ones(env):
+    session_factory, session, user_id = env
+    _add_key(session, user_id)
+    conversation = chat_service.create_conversation(session, user_id)
+    session.commit()
+    factory = FakeFactory(_DeltaProvider(["Leave is 25 days", "【", "1", "】", "."]))
+    turn = chat_service.prepare_turn(
+        session, user_id, conversation.id, "How much leave?", factory=factory, retriever=lambda *a, **k: SOURCES,
+    )
+    session.commit()
+
+    async def collect():
+        return [event async for event in chat_service.stream_turn(turn, session_factory)]
+
+    events = asyncio.run(collect())
+    assert [d["text"] for n, d in events if n == "token"] == ["Leave is 25 days", "[1]", "."]
+    assert [c["number"] for n, d in events if n == "citations" for c in d["citations"]] == [1]
+    session.expire_all()
+    stored = session.query(Message).filter(Message.role == "assistant").one()
+    assert stored.content == "Leave is 25 days[1]."
 
 
 def test_provider_failure_yields_error_event_and_records_it(env):

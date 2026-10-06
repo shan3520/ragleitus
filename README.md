@@ -478,6 +478,27 @@ docker run -d --name ragforge-test-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWO
 TEST_POSTGRES_URL=postgresql+psycopg://postgres:pw@127.0.0.1:55432/postgres pytest -q
 ```
 
+### Live tests against real providers
+
+`tests/live` runs the provider adapters against the real services: key
+checks, a streamed answer with token usage, an answer that cites the right
+passage, embeddings, reranking, the built-in judge, and Ragas and DeepEval
+through one provider. They cost a few cents, so plain `pytest` leaves them
+out; run them with your keys in the environment:
+
+```bash
+OPENAI_API_KEY=... ANTHROPIC_API_KEY=... GEMINI_API_KEY=... pytest -m live tests/live -v
+```
+
+Each provider is skipped unless its key is set (`OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`,
+`NVIDIA_API_KEY`, `TOGETHER_API_KEY`, `MISTRAL_API_KEY`). A self-hosted
+server is tested with `LIVE_CUSTOM_BASE_URL` and `LIVE_CUSTOM_MODEL`.
+`LIVE_<PROVIDER>_MODEL` (and `_EMBEDDING_MODEL`, `_RERANK_MODEL`) choose
+other models. One test needs no key: it checks that each provider refuses a
+made-up key in a way the app recognises. The app itself never reads these
+variables; users store their keys through the app.
+
 Schema changes go through Alembic:
 
 ```bash
@@ -547,10 +568,13 @@ The spec leaves these open; this is what RAGForge assumes:
 
 What is still not there:
 
-- **Tested against stand-ins, not every provider.** Provider adapters and
-  embedders are tested against mocked HTTP and a stub OpenAI-compatible server
-  (the browser tests use it); they follow each provider's published API but
-  have not all been exercised against the real services here.
+- **Not yet run against every real provider.** Adapters, embedders and
+  rerankers are tested against mocked HTTP and a stub OpenAI-compatible server,
+  and `tests/live` runs them against the real services with your keys (see
+  [Development](#development)). So far the live suite has checked how
+  Anthropic and Gemini refuse a bad key (which found and fixed Gemini's
+  400-for-a-bad-key case); the full suite still has to be run with real keys
+  for each provider.
 
 ## License
 

@@ -40,6 +40,12 @@ on the machine that builds this repo, so a test that needs PostgreSQL, Qdrant or
 Redis to be up cannot be verified and will be rejected. Use SQLite in-memory,
 fakes, or mocked HTTP.
 
+The one exception is `tests/live`, which checks the provider adapters against
+the real services. Those tests are marked `live`, are left out of a plain
+`pytest`, and skip any provider whose key is not in the environment; run them
+with `pytest -m live tests/live` (see the README). They are an extra check,
+never a substitute for the mocked tests.
+
 ## Secrets
 
 Never hardcode an API key, and never log one. Provider keys are encrypted at

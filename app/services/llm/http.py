@@ -51,6 +51,26 @@ def retry_after_seconds(headers: Mapping[str, str] | None) -> float | None:
     return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
+def error_status(response: httpx.Response) -> int:
+    """The response's status, with Google's way of rejecting a key made a 401.
+
+    Gemini answers an invalid API key with 400 INVALID_ARGUMENT and the
+    reason API_KEY_INVALID; callers check `is_auth_error` to tell a rejected
+    key from a bad request.
+    """
+    if response.status_code != 400:
+        return response.status_code
+    try:
+        body = response.json()
+    except ValueError:
+        return 400
+    error = body.get("error") if isinstance(body, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    if isinstance(details, list) and any(isinstance(d, dict) and d.get("reason") == "API_KEY_INVALID" for d in details):
+        return 401
+    return 400
+
+
 async def raise_for_status(response: httpx.Response, provider: str, *, include_body: bool = True) -> None:
     """Raise ProviderError for an error response.
 
@@ -67,7 +87,7 @@ async def raise_for_status(response: httpx.Response, provider: str, *, include_b
     await response.aread()
     raise ProviderError(
         f"{provider} returned HTTP {response.status_code}: {_error_text(response)}",
-        status_code=response.status_code,
+        status_code=error_status(response),
         retry_after=retry_after,
     )
 

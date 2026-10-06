@@ -24,7 +24,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.llm.base import ProviderError, Usage
-from app.services.llm.http import _error_text
+from app.services.llm.http import _error_text, error_status
 from app.services.llm.registry import get_spec
 from app.services.llm.url_guard import ensure_public_url_sync
 
@@ -123,7 +123,7 @@ class ProviderEmbedder:
                 raise ProviderError(f"{self._spec.label} returned HTTP {response.status_code}", status_code=response.status_code)
             raise ProviderError(
                 f"{self._spec.label} returned HTTP {response.status_code}: {_error_text(response)}",
-                status_code=response.status_code,
+                status_code=error_status(response),
             )
         try:
             payload = response.json()

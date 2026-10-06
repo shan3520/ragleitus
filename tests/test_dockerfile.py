@@ -50,3 +50,14 @@ def test_the_extras_expansion_installs_what_it_should():
     assert pip_target("ragas,deepeval") == ".[ragas,deepeval]"
     assert pip_target("ragas") == ".[ragas]"
     assert pip_target("") == "."
+
+
+def test_shell_scripts_copied_into_the_image_keep_lf_endings():
+    """A Windows clone (core.autocrlf=true) would otherwise check them out with
+    CRLF, and the api container would fail: exec entrypoint.sh: no such file."""
+    root = Path(__file__).resolve().parents[1]
+    attributes = (root / ".gitattributes").read_text().splitlines()
+    assert "*.sh text eol=lf" in attributes
+    copied = re.findall(r"^COPY (\S+\.sh) ", (root / "Dockerfile").read_text(), re.MULTILINE)
+    assert copied == ["docker/entrypoint.sh"]
+    assert b"\r\n" not in (root / copied[0]).read_bytes()

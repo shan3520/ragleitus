@@ -15,6 +15,7 @@ import pytest
 from app.services import evaluators, rag_evaluation
 from app.services.evaluators import EvaluationInput, JudgeModel
 from app.services.llm.embeddings import ProviderEmbedder
+from app.services.llm.retry import RetryingProvider
 from tests.live.providers import live_provider
 
 PREFERENCE = ("openai", "gemini", "mistral", "together", "anthropic", "groq")
@@ -49,7 +50,9 @@ def test_the_evaluator_libraries_score_through_a_real_provider(judge_provider, n
         if not judge_provider.embedding_model:
             pytest.skip(f"Ragas needs embeddings, which {judge_provider.name} does not offer")
         embedder = ProviderEmbedder(judge_provider.name, judge_provider.key, judge_provider.embedding_model, judge_provider.base_url)
-    judge = JudgeModel(judge_provider.name, judge_provider.provider(), judge_provider.model)
+    # Retried on rate limits, as experiments call evaluators: these libraries make
+    # several calls per answer, more than a free tier allows a minute (Gemini: 5).
+    judge = JudgeModel(judge_provider.name, RetryingProvider(judge_provider.provider()), judge_provider.model)
     scores = asyncio.run(rag_evaluation.score(ITEM, judge, name, embedder))
     assert scores.faithfulness is not None and scores.faithfulness >= 0.5, scores
     assert scores.answer_relevancy is not None, scores

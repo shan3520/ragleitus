@@ -52,6 +52,10 @@ Context passages:
 
 NO_CONTEXT = "(No passages matched this question.)"
 _CITATION_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+# Some models (OpenAI's gpt-oss, e.g. on Groq) cite with full-width brackets: 【1】.
+_FULLWIDTH_CITATION_RE = re.compile(r"【\s*(\d+(?:\s*,\s*\d+)*)\s*】")
+# The start of a full-width marker whose closing bracket has not arrived yet.
+_PARTIAL_FULLWIDTH_RE = re.compile(r"【[\d\s,]{0,20}")
 
 
 class ChatError(Exception):
@@ -192,11 +196,38 @@ def build_prompt(
     return [ChatMessage("system", system), *turns, ChatMessage("user", question)]
 
 
+def normalize_citations(text: str) -> str:
+    """The text with full-width citation markers (【1】) written as [1]."""
+    return _FULLWIDTH_CITATION_RE.sub(r"[\1]", text)
+
+
+class CitationStream:
+    """normalize_citations for streamed text, whose markers may be split across deltas.
+
+    A possible marker start (【, 【1, ...) is held back until it closes or turns
+    out not to be one; `flush` returns whatever is still held at the end.
+    """
+
+    def __init__(self) -> None:
+        self._held = ""
+
+    def feed(self, text: str) -> str:
+        text, self._held = self._held + text, ""
+        start = text.rfind("【")
+        if start != -1 and _PARTIAL_FULLWIDTH_RE.fullmatch(text, start):
+            text, self._held = text[:start], text[start:]
+        return normalize_citations(text)
+
+    def flush(self) -> str:
+        held, self._held = self._held, ""
+        return held
+
+
 def extract_citations(answer: str, sources: list[RetrievedChunk]) -> list[dict]:
-    """Sources cited as [n] in the answer, in order of first citation."""
+    """Sources cited as [n] (or 【n】) in the answer, in order of first citation."""
     cited: list[dict] = []
     seen: set[int] = set()
-    for match in _CITATION_RE.finditer(answer):
+    for match in _CITATION_RE.finditer(normalize_citations(answer)):
         for raw in match.group(1).split(","):
             number = int(raw)
             if number in seen or not 1 <= number <= len(sources):
@@ -382,16 +413,22 @@ async def _stream_turn(turn: PreparedTurn, session_factory, generation) -> Async
     finish_reason = None
     prompt_text = "\n\n".join(m.content for m in turn.prompt)
     tracing.record_content(generation, prompt=prompt_text)
+    citation_stream = CitationStream()
 
     try:
         async for event in turn.provider.stream(turn.prompt, turn.model, settings.llm_max_output_tokens):
             if event.kind == "delta":
                 if ttft_ms is None:
                     ttft_ms = (time.perf_counter() - started) * 1000
-                parts.append(event.text)
-                yield "token", {"text": event.text}
+                text = citation_stream.feed(event.text)
+                if text:
+                    parts.append(text)
+                    yield "token", {"text": text}
             else:
                 usage, served_model, finish_reason = event.usage, event.model, event.finish_reason
+        if held := citation_stream.flush():
+            parts.append(held)
+            yield "token", {"text": held}
     except ProviderError as exc:
         generation.set_status(Status(StatusCode.ERROR, exc.message))
         # Blocking database work runs in a thread so other streams keep flowing.

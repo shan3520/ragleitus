@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 ATTEMPTS = 4  # the first try and three retries
 MAX_WAIT_SECONDS = 30.0
+# A provider asking for a longer wait than this has run out of a quota that will
+# not come back during the run (Gemini's free tier: 20 requests a day per model,
+# then "retry in 18h"); waiting out the retries would only delay the error.
+GIVE_UP_AFTER_SECONDS = 300.0
+
+
+def worth_retrying(exc: ProviderError) -> bool:
+    return exc.is_retryable and (exc.retry_after is None or exc.retry_after <= GIVE_UP_AFTER_SECONDS)
 
 
 def backoff_seconds(exc: ProviderError, retry: int) -> float:
@@ -64,7 +72,7 @@ class RetryingProvider:
                     yield event
                 return
             except ProviderError as exc:
-                if produced or not exc.is_retryable or attempt == self.attempts - 1:
+                if produced or not worth_retrying(exc) or attempt == self.attempts - 1:
                     raise
                 wait = backoff_seconds(exc, attempt)
                 logger.info(
@@ -102,7 +110,7 @@ class RetryingReranker:
             try:
                 return self.inner.rerank(query, passages)
             except ProviderError as exc:
-                if not exc.is_retryable or attempt == self.attempts - 1:
+                if not worth_retrying(exc) or attempt == self.attempts - 1:
                     raise
                 self._sleep(backoff_seconds(exc, attempt))
         raise AssertionError("unreachable")

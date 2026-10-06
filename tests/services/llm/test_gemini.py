@@ -55,6 +55,25 @@ def test_thought_parts_are_not_returned_as_answer_text():
     assert result.text == "Answer"
 
 
+def test_thinking_tokens_count_as_output():
+    # gemini-2.5-flash's real usageMetadata for "Reply with the single word: ready".
+    metadata = {"promptTokenCount": 8, "candidatesTokenCount": 1, "totalTokenCount": 28, "thoughtsTokenCount": 19,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 8}], "serviceTier": "standard"}
+    # Its real usageMetadata when thinking used the whole budget (16): no candidatesTokenCount.
+    spent = {"promptTokenCount": 5, "totalTokenCount": 18, "thoughtsTokenCount": 13}
+
+    def handler_for(usage):
+        def handler(request):
+            chunk = {"candidates": [{"content": {"parts": [{"text": "ready"}]}, "finishReason": "STOP"}], "usageMetadata": usage}
+            return httpx.Response(200, content=f"data: {json.dumps(chunk)}\n\n".encode())
+        return handler
+
+    result = asyncio.run(complete(_provider(handler_for(metadata)), [ChatMessage("user", "Q")], "m", 64))
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens) == (8, 20)
+    result = asyncio.run(complete(_provider(handler_for(spent)), [ChatMessage("user", "Q")], "m", 16))
+    assert result.usage.completion_tokens == 13
+
+
 def test_error_status():
     def handler(request):
         return httpx.Response(400, json={"error": {"message": "API key not valid"}})

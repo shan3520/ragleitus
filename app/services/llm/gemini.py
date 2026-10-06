@@ -14,6 +14,18 @@ DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _FINISH_REASONS = {"STOP": "stop", "MAX_TOKENS": "length", "SAFETY": "refusal"}
 
 
+def _output_tokens(metadata: dict) -> int | None:
+    """Tokens billed as output: the answer plus, for thinking models, the thoughts.
+
+    Gemini reports thinking separately (thoughtsTokenCount) but bills it as
+    output, and leaves candidatesTokenCount out when the answer is empty.
+    """
+    answer, thoughts = metadata.get("candidatesTokenCount"), metadata.get("thoughtsTokenCount")
+    if answer is None and thoughts is None:
+        return None
+    return (answer or 0) + (thoughts or 0)
+
+
 class GeminiProvider:
     name = "gemini"
 
@@ -53,7 +65,7 @@ class GeminiProvider:
                         if metadata:
                             usage = Usage(
                                 prompt_tokens=metadata.get("promptTokenCount"),
-                                completion_tokens=metadata.get("candidatesTokenCount"),
+                                completion_tokens=_output_tokens(metadata),
                             )
                         for candidate in chunk.get("candidates") or []:
                             for part in (candidate.get("content") or {}).get("parts") or []:

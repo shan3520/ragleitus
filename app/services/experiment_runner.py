@@ -49,7 +49,7 @@ from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models.experiment import Experiment, ExperimentResult, ExperimentVariant
 from app.services import telemetry
-from app.services.chat_service import build_prompt, extract_citations, prompt_template
+from app.services.chat_service import build_prompt, extract_citations, normalize_citations, prompt_template
 from app.services.llm import ProviderError, ProviderFactory, Usage, complete, create_provider, get_spec
 from app.services.llm.pricing import estimate_cost_usd
 from app.services.llm.retry import RetryingReranker, with_retries
@@ -170,7 +170,7 @@ def build_graph(
             latency_ms=latency_ms, usage=result.usage, prompt_text=prompt_text, completion_text=result.text,
         )
         usage = Usage(event.prompt_tokens, event.completion_tokens)
-        return {"answer": result.text, "model": model, "usage": usage, "latency_ms": latency_ms}
+        return {"answer": normalize_citations(result.text), "model": model, "usage": usage, "latency_ms": latency_ms}
 
     embedders: list = []
 

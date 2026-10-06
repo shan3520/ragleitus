@@ -20,6 +20,9 @@ LIVE_CUSTOM_RERANK_MODEL.
 The models default to each provider's defaults in the app; override them
 with LIVE_<PROVIDER>_MODEL, LIVE_<PROVIDER>_EMBEDDING_MODEL and
 LIVE_<PROVIDER>_RERANK_MODEL (e.g. LIVE_ANTHROPIC_MODEL=claude-haiku-4-5).
+
+test_local_models.py needs no key: it runs the server's own embedding model
+and reranker, which fastembed downloads from Hugging Face on first use.
 """
 
 from __future__ import annotations
@@ -27,13 +30,19 @@ from __future__ import annotations
 import pytest
 
 from app.core.config import settings
+from app.services.llm import retry
 from tests import network
 from tests.live.providers import KEY_VARIABLES, Live, live_provider
+
+# Read before tests/conftest.py sets it to 0 for each test.
+REAL_MAX_WAIT_SECONDS = retry.MAX_WAIT_SECONDS
 
 
 @pytest.fixture(autouse=True)
 def _real_network(monkeypatch):
     network.allow(monkeypatch)
+    # Real rate limits: retried calls wait as the provider asks, as in the app.
+    monkeypatch.setattr(retry, "MAX_WAIT_SECONDS", REAL_MAX_WAIT_SECONDS)
     # A self-hosted server is usually on this machine or the LAN.
     monkeypatch.setattr(settings, "allow_private_provider_urls", True)
 

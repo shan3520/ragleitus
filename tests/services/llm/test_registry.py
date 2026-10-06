@@ -16,6 +16,9 @@ def test_create_provider_picks_adapter_by_kind():
     groq = create_provider("groq", "gsk")
     assert isinstance(groq, OpenAICompatibleProvider)
     assert groq._base_url == "https://api.groq.com/openai/v1"
+    assert groq._models_path == "/models"
+    # OpenRouter's /models is public, so the key check lists /models/user instead.
+    assert create_provider("openrouter", "sk-or-x")._models_path == "/models/user"
 
 
 def test_custom_provider_requires_base_url():

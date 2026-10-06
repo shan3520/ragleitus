@@ -77,3 +77,40 @@ def test_retry_after_is_read_from_seconds_or_a_date():
     with pytest.raises(ProviderError) as exc:
         asyncio.run(raise_for_status(httpx.Response(429, headers={"Retry-After": "12"}, text="slow"), "openai"))
     assert exc.value.retry_after == 12.0 and exc.value.is_retryable
+
+
+# Gemini's real free-tier 429 (message shortened): the wait is in the body, not a header.
+GEMINI_429 = {
+    "error": {
+        "code": 429,
+        "message": "You exceeded your current quota, please check your plan and billing details.",
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.Help",
+             "links": [{"description": "Learn more about Gemini API quotas", "url": "https://ai.google.dev/gemini-api/docs/rate-limits"}]},
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+             "violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "quotaValue": "5"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "34s"},
+        ],
+    }
+}
+
+
+def test_a_google_retry_delay_in_the_body_is_the_wait():
+    from app.services.llm.http import google_retry_delay
+
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(raise_for_status(httpx.Response(429, json=GEMINI_429), "gemini"))
+    assert exc.value.retry_after == 34.0 and exc.value.is_retryable
+    assert "exceeded your current quota" in exc.value.message
+
+    # A Retry-After header still wins; odd or missing delays are ignored.
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(raise_for_status(httpx.Response(429, headers={"Retry-After": "3"}, json=GEMINI_429), "gemini"))
+    assert exc.value.retry_after == 3.0
+    assert google_retry_delay(httpx.Response(429, json={"error": {"details": [
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "0.5s"}]}})) == 0.5
+    assert google_retry_delay(httpx.Response(429, json={"error": {"details": [
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "soon"}]}})) is None
+    assert google_retry_delay(httpx.Response(429, json={"error": "slow down"})) is None
+    assert google_retry_delay(httpx.Response(429, text="not json")) is None

@@ -27,6 +27,8 @@ class ProviderSpec:
     stream_usage_option: bool = True
     # Whether the user supplies the base URL (self-hosted servers).
     requires_base_url: bool = False
+    # Where the key check lists models; it must need the key, or any key passes.
+    models_path: str = "/models"
     # Suggested model for embedding documents through this provider. None:
     # the provider offers no embeddings API. "": supported, but the user must
     # name the model (self-hosted servers).
@@ -55,9 +57,18 @@ PROVIDERS: dict[str, ProviderSpec] = {
             embedding_model="text-embedding-3-small",
         ),
         ProviderSpec("anthropic", "Anthropic", "anthropic", "claude-opus-5-5", key_pattern=re.compile(r"^sk-ant-[A-Za-z0-9_\-]{8,}$")),
-        ProviderSpec("gemini", "Google Gemini", "gemini", "gemini-2.5-flash", base_url=GEMINI_BASE_URL, key_pattern=re.compile(r"^AIza[0-9A-Za-z\-_]{20,}$"), embedding_model="gemini-embedding-001"),
-        ProviderSpec("groq", "Groq", "openai_compatible", "llama-3.3-70b-versatile", base_url="https://api.groq.com/openai/v1"),
-        ProviderSpec("openrouter", "OpenRouter", "openai_compatible", "openai/gpt-4o-mini", base_url="https://openrouter.ai/api/v1"),
+        # Standard keys start AIza; AI Studio has issued "auth keys" (AQ.) since 28 May 2026.
+        ProviderSpec(
+            "gemini", "Google Gemini", "gemini", "gemini-2.5-flash", base_url=GEMINI_BASE_URL,
+            key_pattern=re.compile(r"^(AIza[0-9A-Za-z\-_]{20,}|AQ\.[0-9A-Za-z\-_.]{20,})$"), embedding_model="gemini-embedding-001",
+        ),
+        ProviderSpec("groq", "Groq", "openai_compatible", "openai/gpt-oss-120b", base_url="https://api.groq.com/openai/v1"),
+        # OpenRouter's /models is public; /models/user (the same list, filtered by the
+        # account's settings) is the one that needs the key.
+        ProviderSpec(
+            "openrouter", "OpenRouter", "openai_compatible", "openai/gpt-4o-mini", base_url="https://openrouter.ai/api/v1",
+            models_path="/models/user",
+        ),
         ProviderSpec(
             "nvidia", "NVIDIA NIM", "openai_compatible", "meta/llama-3.1-70b-instruct", base_url="https://integrate.api.nvidia.com/v1",
             embedding_model="nvidia/nv-embedqa-e5-v5", embedding_input_type=True,
@@ -105,7 +116,9 @@ def create_provider(name: str, api_key: str, base_url: str | None = None) -> Cha
             name, api_key, url, stream_usage_option=spec.stream_usage_option,
             url_guard=ensure_public_url, expose_error_body=False,
         )
-    return OpenAICompatibleProvider(name, api_key, url, stream_usage_option=spec.stream_usage_option)
+    return OpenAICompatibleProvider(
+        name, api_key, url, stream_usage_option=spec.stream_usage_option, models_path=spec.models_path
+    )
 
 
 # Signature shared by create_provider and the fakes tests inject in its place.

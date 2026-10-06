@@ -28,7 +28,8 @@ PRICES_PER_MILLION: dict[str, tuple[float, float]] = {
     "text-embedding-3-large": (0.13, 0.0),
     "gemini-embedding-001": (0.15, 0.0),
     "mistral-embed": (0.10, 0.0),
-    # Groq
+    # Groq (openai/gpt-oss-120b: console.groq.com/docs/model/openai/gpt-oss-120b, 2026-10-06)
+    "openai/gpt-oss-120b": (0.15, 0.60),
     "llama-3.3-70b-versatile": (0.59, 0.79),
     "llama-3.1-8b-instant": (0.05, 0.08),
 }

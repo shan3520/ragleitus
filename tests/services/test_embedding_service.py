@@ -40,8 +40,8 @@ def test_everyone_starts_on_the_local_model(session, user):
     described = embedding_service.describe(session, user.id)
     assert described["provider"] == LOCAL and described["key_missing"] is False
     providers = {o["provider"]: o for o in described["options"]}
-    # Only providers that offer embeddings are offered.
-    assert {"local", "openai", "gemini", "mistral", "together", "nvidia", "custom"} == set(providers)
+    # Only providers that offer embeddings are offered (NVIDIA only to users with its key).
+    assert {"local", "openai", "gemini", "mistral", "together", "custom"} == set(providers)
     assert providers["openai"]["default_model"] == "text-embedding-3-small"
     assert providers["openai"]["has_key"] is False
 
@@ -171,3 +171,10 @@ def test_record_calls_ignores_embedders_without_a_log(session, user):
     assert session.query(TelemetryEvent).count() == 1
     embedding_service.record_calls(session, user.id, embedder)
     assert session.query(TelemetryEvent).count() == 1
+
+
+def test_a_provider_not_offered_for_new_keys_is_listed_only_to_users_who_have_its_key(session, user):
+    assert "nvidia" not in {o["provider"] for o in embedding_service.options(session, user.id)}
+    save_provider_key(session, user.id, "nvidia", encrypt_key("nvapi-existingkey1234"))
+    option = {o["provider"]: o for o in embedding_service.options(session, user.id)}["nvidia"]
+    assert option["has_key"] is True

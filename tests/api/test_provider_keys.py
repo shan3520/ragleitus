@@ -148,6 +148,33 @@ def test_list_providers_marks_configured_ones():
     assert providers["custom"]["requires_base_url"] is True
 
 
+def test_a_provider_not_offered_for_new_keys_is_refused_but_existing_keys_keep_working():
+    from app.models import ProviderKey
+    from app.services.provider_key import encrypt_key
+
+    client, headers, factory = _client()
+    providers = {p["name"] for p in client.get("/api/providers", headers=headers).json()}
+    assert "nvidia" not in providers and "openai" in providers
+
+    refused = client.post("/api/provider-keys", json={"provider": "nvidia", "key": "nvapi-newkey1234"}, headers=headers)
+    assert refused.status_code == 400
+    assert "not offered for new keys" in refused.json()["detail"]
+    assert factory.created == []  # never sent to NVIDIA
+
+    # A key stored before keeps working, is listed, and can be replaced.
+    user_id = client.get("/auth/me", headers=headers).json()["id"]
+    session = SessionLocal()
+    session.add(ProviderKey(user_id=user_id, provider="nvidia", encrypted_key=encrypt_key("nvapi-oldkey12345678")))
+    session.commit()
+    session.close()
+    listed = {p["name"]: p for p in client.get("/api/providers", headers=headers).json()}
+    assert listed["nvidia"]["configured"] is True
+    replaced = client.post(
+        "/api/provider-keys", json={"provider": "nvidia", "key": "nvapi-newkey1234", "validate": False}, headers=headers
+    )
+    assert replaced.status_code == 200, replaced.text
+
+
 def test_users_cannot_see_or_delete_each_others_keys():
     client, owner_headers, _ = _client()
     other_headers, _ = login(client, unique_username("key_other"))

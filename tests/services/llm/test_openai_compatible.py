@@ -117,6 +117,39 @@ def test_a_made_up_key_fails_where_the_public_model_list_would_accept_it():
     assert exc.value.is_auth_error and "sk-or-v1-madeup" not in exc.value.message
 
 
+def test_a_key_check_url_is_asked_first_for_a_provider_whose_model_list_needs_no_key():
+    # NVIDIA, for real: /v1/models answers anyone; the cloud-functions list
+    # answers 403 to a made-up key (401 to none) and 200 to a valid one.
+    seen = []
+
+    def handler(valid):
+        def handle(request):
+            seen.append((request.url.host, request.url.path, request.headers.get("authorization")))
+            if request.url.host == "api.nvcf.nvidia.com":
+                if valid:
+                    return httpx.Response(200, json={"functions": [{"id": "f-1", "name": "ai-nemotron", "status": "ACTIVE"}]})
+                return httpx.Response(403, json={  # NVCF's real answer to a made-up key
+                    "detail": "Authorization failed", "instance": "/v2/nvcf/functions", "status": 403,
+                    "title": "Forbidden", "type": "urn:nv-boot:problem-details:forbidden"})
+            return httpx.Response(200, json={"object": "list", "data": [{"id": "nvidia/nemotron-3-super-120b-a12b"}]})
+        return handle
+
+    def provider(valid):
+        return OpenAICompatibleProvider(
+            "nvidia", "nvapi-key", "https://integrate.api.nvidia.com/v1", transport=httpx.MockTransport(handler(valid)),
+            key_check_url="https://api.nvcf.nvidia.com/v2/nvcf/functions",
+        )
+
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(provider(False).list_models())
+    assert exc.value.is_auth_error and "nvapi-key" not in exc.value.message
+    assert seen == [("api.nvcf.nvidia.com", "/v2/nvcf/functions", "Bearer nvapi-key")]  # the public list is not asked
+
+    seen.clear()
+    assert asyncio.run(provider(True).list_models()) == ["nvidia/nemotron-3-super-120b-a12b"]
+    assert [path for _, path, _ in seen] == ["/v2/nvcf/functions", "/v1/models"]
+
+
 def test_no_authorization_header_when_key_is_empty():
     headers = {}
 

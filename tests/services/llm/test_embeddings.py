@@ -46,8 +46,13 @@ def test_openai_compatible_embeddings_in_batches_and_order():
 
 
 def test_nvidia_says_whether_it_embeds_a_passage_or_a_query():
+    # NVIDIA documents input_type as required for nvidia/nemotron-3-embed-1b, the default.
+    from app.services.llm import get_spec
+
     requests = []
-    embedder = ProviderEmbedder("nvidia", KEY, "nvidia/nv-embedqa-e5-v5", transport=httpx.MockTransport(_openai_handler(requests)))
+    model = get_spec("nvidia").embedding_model
+    assert model == "nvidia/nemotron-3-embed-1b"
+    embedder = ProviderEmbedder("nvidia", KEY, model, transport=httpx.MockTransport(_openai_handler(requests)))
     embedder.embed_documents(["a passage"])
     embedder.embed_query("a question")
     assert [body["input_type"] for _, body in requests] == ["passage", "query"]

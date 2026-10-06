@@ -29,6 +29,9 @@ class ProviderSpec:
     requires_base_url: bool = False
     # Where the key check lists models; it must need the key, or any key passes.
     models_path: str = "/models"
+    # For a provider whose model list needs no key: a free GET that does, which
+    # the key check calls first.
+    key_check_url: str | None = None
     # Suggested model for embedding documents through this provider. None:
     # the provider offers no embeddings API. "": supported, but the user must
     # name the model (self-hosted servers).
@@ -77,15 +80,15 @@ PROVIDERS: dict[str, ProviderSpec] = {
             "openrouter", "OpenRouter", "openai_compatible", "openai/gpt-4o-mini", base_url="https://openrouter.ai/api/v1",
             models_path="/models/user",
         ),
+        # Defaults confirmed live on 2026-10-06; NVIDIA retired the earlier ones in 2026.
+        # /v1/models answers without a key, so the key check first lists the
+        # account's cloud functions, which needs one (401/403 otherwise).
         ProviderSpec(
-            "nvidia", "NVIDIA NIM", "openai_compatible", "meta/llama-3.1-70b-instruct", base_url="https://integrate.api.nvidia.com/v1",
-            embedding_model="nvidia/nv-embedqa-e5-v5", embedding_input_type=True,
-            rerank_model="nvidia/llama-3.2-nv-rerankqa-1b-v2", rerank_format="nvidia",
-            # Found by the live tests on 2026-10-06 (see the README).
-            unavailable=(
-                "NVIDIA NIM is not offered for new keys until it is verified again: NVIDIA has retired "
-                "its default models, and its model list answers without a key, so a key cannot be checked."
-            ),
+            "nvidia", "NVIDIA NIM", "openai_compatible", "nvidia/nemotron-3-super-120b-a12b",
+            base_url="https://integrate.api.nvidia.com/v1",
+            key_check_url="https://api.nvcf.nvidia.com/v2/nvcf/functions",
+            embedding_model="nvidia/nemotron-3-embed-1b", embedding_input_type=True,
+            rerank_model="nvidia/llama-nemotron-rerank-vl-1b-v2", rerank_format="nvidia",
         ),
         ProviderSpec(
             "together", "Together AI", "openai_compatible", "meta-llama/Llama-3.3-70B-Instruct-Turbo", base_url="https://api.together.xyz/v1",
@@ -130,7 +133,8 @@ def create_provider(name: str, api_key: str, base_url: str | None = None) -> Cha
             url_guard=ensure_public_url, expose_error_body=False,
         )
     return OpenAICompatibleProvider(
-        name, api_key, url, stream_usage_option=spec.stream_usage_option, models_path=spec.models_path
+        name, api_key, url, stream_usage_option=spec.stream_usage_option, models_path=spec.models_path,
+        key_check_url=spec.key_check_url,
     )
 
 

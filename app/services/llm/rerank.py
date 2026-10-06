@@ -9,7 +9,9 @@ embeddings. Two wire formats cover the providers that offer one:
   such as vLLM, Infinity or LocalAI;
 - NVIDIA's `POST https://ai.api.nvidia.com/v1/retrieval/<model>/reranking`
   with {model, query: {text}, passages: [{text}]} returning
-  {rankings: [{index, logit}]}.
+  {rankings: [{index, logit}], usage}. NVIDIA retires these models (and their
+  URLs answer 410); nvidia/llama-nemotron-rerank-vl-1b-v2 was current on
+  2026-10-06.
 
 Like ProviderEmbedder, this is synchronous, notes every call in `calls` for
 telemetry, and never puts the key (or, for user-supplied URLs, the response

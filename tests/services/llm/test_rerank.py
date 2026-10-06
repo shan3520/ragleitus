@@ -40,6 +40,7 @@ def test_together_uses_the_cohere_style_rerank_endpoint():
 
 
 def test_nvidia_uses_its_reranking_endpoint_and_logits():
+    # An older model, for the URL rule: "." in the model name is spelled "_".
     requests = []
 
     def handler(request):
@@ -54,6 +55,24 @@ def test_nvidia_uses_its_reranking_endpoint_and_logits():
         "model": "nvidia/llama-3.2-nv-rerankqa-1b-v2", "query": {"text": "q"},
         "passages": [{"text": "a"}, {"text": "b"}], "truncate": "END",
     }
+
+
+def test_nvidia_s_current_default_model_with_its_real_response():
+    from app.services.llm import get_spec
+
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        # nvidia/llama-nemotron-rerank-vl-1b-v2's real answer for the live tests' question and passages.
+        return httpx.Response(200, json={"rankings": [{"index": 1, "logit": 4.0703125}, {"index": 0, "logit": -6.94921875}],
+                                         "usage": {"prompt_tokens": 50, "total_tokens": 50}})
+
+    model = get_spec("nvidia").rerank_model
+    assert model == "nvidia/llama-nemotron-rerank-vl-1b-v2"
+    reranker = ProviderReranker("nvidia", "nvapi-x", model, transport=httpx.MockTransport(handler))
+    assert reranker.rerank("q", ["leave", "certificate"]) == [-6.94921875, 4.0703125]
+    assert str(requests[0].url) == "https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-nemotron-rerank-vl-1b-v2/reranking"
 
 
 def test_a_self_hosted_server_answering_a_bare_list_with_scores(monkeypatch):

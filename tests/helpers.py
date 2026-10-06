@@ -39,3 +39,12 @@ def user_id_for(username: str) -> int:
         return session.query(User.id).filter(User.username == username).scalar()
     finally:
         session.close()
+
+
+def hide_provider(monkeypatch, name: str, reason: str = "Not offered for new keys (test).") -> None:
+    """Mark a provider not offered for new keys (ProviderSpec.unavailable) for one test."""
+    from dataclasses import replace
+
+    from app.services.llm.registry import PROVIDERS
+
+    monkeypatch.setitem(PROVIDERS, name, replace(PROVIDERS[name], unavailable=reason))

@@ -10,7 +10,7 @@ from app.services.llm.embeddings import EmbeddingCall
 from app.services.llm.base import Usage
 from app.services.provider_key import encrypt_key, save_provider_key
 from app.services.reranking import RerankChoice, RerankSettingsError
-from tests.helpers import make_user
+from tests.helpers import hide_provider, make_user
 
 
 @pytest.fixture
@@ -40,10 +40,17 @@ def test_reranking_is_off_until_chosen(db_session):
     assert reranking.get_choice(db_session, user.id).is_off
     described = reranking.describe(db_session, user.id)
     assert described["provider"] == "none" and described["candidates"] == 20
-    providers = [o["provider"] for o in described["options"]]
-    assert providers == ["none", "local", "together", "custom"]  # NVIDIA only to users with its key
-    save_provider_key(db_session, user.id, "nvidia", encrypt_key("nvapi-existingkey1234"))
-    assert "nvidia" in [o["provider"] for o in reranking.options(db_session, user.id)]
+    options = {o["provider"]: o for o in described["options"]}
+    assert list(options) == ["none", "local", "nvidia", "together", "custom"]
+    assert options["nvidia"]["default_model"] == "nvidia/llama-nemotron-rerank-vl-1b-v2"
+
+
+def test_a_provider_not_offered_for_new_keys_is_listed_only_to_users_who_have_its_key(db_session, monkeypatch):
+    hide_provider(monkeypatch, "together")
+    user = make_user(db_session)
+    assert "together" not in [o["provider"] for o in reranking.options(db_session, user.id)]
+    save_provider_key(db_session, user.id, "together", encrypt_key("tgp-existingkey1234"))
+    assert "together" in [o["provider"] for o in reranking.options(db_session, user.id)]
 
 
 def test_choose_local_then_a_provider_then_off(db_session):

@@ -19,6 +19,9 @@ def test_create_provider_picks_adapter_by_kind():
     assert groq._models_path == "/models"
     # OpenRouter's /models is public, so the key check lists /models/user instead.
     assert create_provider("openrouter", "sk-or-x")._models_path == "/models/user"
+    # NVIDIA's /v1/models is public too; its key check lists the account's cloud functions.
+    assert groq._key_check_url is None
+    assert create_provider("nvidia", "nvapi-x")._key_check_url == "https://api.nvcf.nvidia.com/v2/nvcf/functions"
 
 
 def test_custom_provider_requires_base_url():

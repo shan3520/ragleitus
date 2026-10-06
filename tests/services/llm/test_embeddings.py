@@ -159,3 +159,15 @@ def test_providers_without_embeddings_and_missing_models_are_refused():
         ProviderEmbedder("anthropic", KEY, "anything")
     with pytest.raises(ProviderError, match="Choose an embedding model"):
         ProviderEmbedder("custom", "none", "", "https://example.com/v1")
+
+
+def test_gemini_rejecting_the_key_is_an_auth_error():
+    from tests.services.llm.test_gemini import INVALID_KEY
+
+    embedder = ProviderEmbedder(
+        "gemini", "AIza" + "x" * 30, "gemini-embedding-001",
+        transport=httpx.MockTransport(lambda request: httpx.Response(400, json=INVALID_KEY)),
+    )
+    with pytest.raises(ProviderError) as exc:
+        embedder.embed_query("q")
+    assert exc.value.is_auth_error

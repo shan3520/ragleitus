@@ -16,26 +16,13 @@ os.environ["PROVIDER_KEY_SECRET"] = "test-provider-key-secret-not-for-production
 os.environ["VECTOR_STORE_URL"] = ":memory:"
 os.environ["EMBEDDING_BACKEND"] = "fake"
 os.environ["RERANK_BACKEND"] = "fake"
-# A local HTTP proxy would let outbound requests past the loopback exemption below.
-for _proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-    os.environ.pop(_proxy_var, None)
-
-import socket  # noqa: E402
 
 import pytest  # noqa: E402
 
-_real_connect = socket.socket.connect
+from tests import network  # noqa: E402
 
-
-def _no_network(self, address):
-    # Tests must run with no external services (CONTRIBUTING.md). Unix sockets and
-    # loopback stay available; anything else fails loudly instead of hanging.
-    if self.family == socket.AF_UNIX or (isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1", "localhost")):
-        return _real_connect(self, address)
-    raise RuntimeError(f"test attempted a network connection to {address!r}")
-
-
-socket.socket.connect = _no_network
+# No outbound connections, except to loopback (see tests/network.py).
+network.block()
 
 from app.db.database import Base, engine  # noqa: E402
 

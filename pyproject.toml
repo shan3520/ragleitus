@@ -52,7 +52,9 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-p no:cacheprovider"
+# The live tests (tests/live) call real providers with real keys: only with `-m live`.
+addopts = "-p no:cacheprovider -m 'not live'"
+markers = ["live: calls real LLM providers; needs their API keys (pytest -m live tests/live)"]
 filterwarnings = [
     "ignore::DeprecationWarning:starlette.*",
     "ignore:Using `httpx` with `starlette.testclient`",

@@ -65,6 +65,45 @@ def test_error_status():
     assert "AIza-secret" not in exc.value.message
 
 
+# What Gemini really answers for an invalid key (checked against the live API).
+INVALID_KEY = {
+    "error": {
+        "code": 400,
+        "message": "API key not valid. Please pass a valid API key.",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_INVALID", "domain": "googleapis.com"},
+        ],
+    }
+}
+
+
+def test_an_invalid_key_is_an_auth_error_although_gemini_says_400():
+    from app.services.provider_validation import verify_provider_key
+
+    def handler(request):
+        return httpx.Response(400, json=INVALID_KEY)
+
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(complete(_provider(handler), [ChatMessage("user", "Q")], "m", 10))
+    assert exc.value.is_auth_error and "API key not valid" in exc.value.message
+
+    def factory(name, key, base_url=None):
+        return _provider(handler)
+
+    check = asyncio.run(verify_provider_key("gemini", "AIza" + "x" * 35, factory=factory))
+    assert (check.valid, check.detail, check.unreachable) == (False, "Google Gemini rejected the key.", False)
+
+
+def test_other_bad_requests_stay_bad_requests():
+    def handler(request):
+        return httpx.Response(400, json={"error": {"code": 400, "message": "model not found", "status": "INVALID_ARGUMENT"}})
+
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(complete(_provider(handler), [ChatMessage("user", "Q")], "m", 10))
+    assert exc.value.status_code == 400 and not exc.value.is_auth_error
+
+
 def test_list_models_strips_prefix():
     def handler(request):
         return httpx.Response(200, json={"models": [{"name": "models/gemini-a"}, {"name": "models/gemini-b"}]})

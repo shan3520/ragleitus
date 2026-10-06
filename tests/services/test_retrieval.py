@@ -230,3 +230,115 @@ def test_dense_or_keyword_strategies_use_one_ranking(env):
     assert dense and all(r.keyword_rank is None and r.dense_rank for r in dense)
     with pytest.raises(ValueError):
         search(user.id, "x", strategy="magic")
+
+
+# ---------------------------------------------------------------- reranking
+
+
+class _ScriptedReranker:
+    """Puts the passages containing `favourite` first; records what it was asked."""
+
+    model_name = "scripted"
+    provider = "together"
+    model = "scripted-rank"
+
+    def __init__(self, favourite="", fail=None):
+        self.favourite, self.fail = favourite, fail
+        self.asked: list[tuple[str, list[str]]] = []
+        self.calls = []
+
+    def rerank(self, query, passages):
+        self.asked.append((query, passages))
+        if self.fail:
+            raise self.fail
+        return [1.0 if self.favourite in p else 0.0 for p in passages]
+
+
+def _turn_on_reranking(session, user_id, provider="local"):
+    from app.models.user_settings import UserSettings
+
+    session.merge(UserSettings(user_id=user_id, rerank_provider=provider, rerank_model=None if provider == "local" else "m"))
+    session.commit()
+
+
+def _many(add, user_id):
+    for i in range(10):
+        add(user_id, f"leave{i}.txt", f"Annual leave policy note {i}: employees receive leave days.")
+    add(user_id, "travel.txt", "Travel policy: annual leave days can be combined with travel.")
+
+
+def test_reranking_reorders_the_candidates_and_keeps_the_top_k(env):
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+    _many(add, user.id)
+    _turn_on_reranking(session, user.id)
+    reranker = _ScriptedReranker(favourite="Travel policy")
+
+    results = search(user.id, "annual leave days", k=3, reranker_factory=lambda s, u, c: reranker)
+
+    assert len(results) == 3
+    assert results[0].document_title == "travel" and results[0].rerank_score == 1.0
+    query, passages = reranker.asked[0]
+    assert query == "annual leave days" and len(passages) == 11  # every candidate, not just the top 3
+    # Without reranking (setting off, or turned off for the call) the order is the fused one.
+    assert all(r.rerank_score is None for r in search(user.id, "annual leave days", k=3, rerank=False))
+
+
+def test_reranking_is_off_unless_the_user_turned_it_on(env):
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+    _many(add, user.id)
+    reranker = _ScriptedReranker(favourite="Travel policy")
+
+    results = search(user.id, "annual leave days", k=3, reranker_factory=lambda s, u, c: reranker)
+    assert reranker.asked == [] and all(r.rerank_score is None for r in results)
+
+    # Asked for explicitly (an experiment variant) while off: a warning, the usual order.
+    warnings = []
+    search(user.id, "annual leave days", k=3, rerank=True, warnings=warnings, reranker_factory=lambda s, u, c: reranker)
+    assert reranker.asked == [] and "it is off in your settings" in warnings[0]
+
+
+def test_a_failing_reranker_keeps_the_fused_order_with_a_warning(env):
+    from app.services.llm import ProviderError
+    from app.services.reranking import RerankUnavailable
+
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+    _many(add, user.id)
+    plain = search(user.id, "annual leave days", k=3)
+    _turn_on_reranking(session, user.id, provider="together")
+
+    for failure, reason in [
+        (ProviderError("Together AI returned HTTP 503: overloaded", 503), "Together AI returned HTTP 503: overloaded"),
+        (RuntimeError("model file corrupt"), "RuntimeError"),
+    ]:
+        warnings = []
+        reranker = _ScriptedReranker(fail=failure)
+        results = search(user.id, "annual leave days", k=3, warnings=warnings, reranker_factory=lambda s, u, c: reranker)
+        assert [r.chunk_id for r in results] == [r.chunk_id for r in plain]
+        assert warnings == [
+            f"Passages could not be reranked with together/m, so they are in their usual order: {reason}"
+        ]
+
+    def no_key(session_, user_id, choice):
+        raise RerankUnavailable("No API key stored for Together AI, which your reranking setting uses.")
+
+    warnings = []
+    assert len(search(user.id, "annual leave days", k=3, warnings=warnings, reranker_factory=no_key)) == 3
+    assert "No API key stored for Together AI" in warnings[0]
+
+
+def test_the_local_reranker_is_used_by_default_when_on(env):
+    session, add, search = env
+    user = make_user(session)
+    session.commit()
+    add(user.id, "errors.txt", "Error E-4711 means the upstream certificate expired.")
+    add(user.id, "hr.txt", "Employees receive 25 days of annual leave.")
+    _turn_on_reranking(session, user.id)
+
+    results = search(user.id, "What does error E-4711 mean?")  # the fake local reranker (shared words)
+    assert results[0].document_title == "errors" and results[0].rerank_score > results[-1].rerank_score

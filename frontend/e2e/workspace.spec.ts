@@ -119,6 +119,22 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
     await expect(page.locator('[aria-current="location"]')).toContainText("E-4711");
   });
 
+  await test.step("rerank passages with the self-hosted server's reranker", async () => {
+    await page.goto("/settings");
+    await page.getByLabel("Reranker").selectOption({ label: "OpenAI-compatible (self-hosted)" });
+    await page.getByLabel("Reranking model").fill("stub-reranker");
+    await page.getByRole("button", { name: "Save reranker" }).click();
+    await expect(page.getByText("Saved. Passages are reranked with OpenAI-compatible (self-hosted) · stub-reranker.")).toBeVisible();
+
+    // Answers still cite the right passage, now chosen by the reranker.
+    await page.goto("/chat");
+    await page.getByLabel("Model", { exact: true }).fill("stub-model");
+    await page.getByLabel("Message").fill("What does error code E-4711 mean?");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".prose-answer").last()).toContainText("E-4711", { timeout: 30_000 });
+    await expect(page.locator(".prose-answer a").last()).toBeVisible();
+  });
+
   await test.step("save a prompt and compare it with the built-in one in an experiment", async () => {
     await page.goto("/prompts");
     await page.getByLabel("Name", { exact: true }).fill("Brief");
@@ -136,6 +152,7 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
     await page.locator("#variant-1-model").fill("stub-model");
     await page.locator("#variant-1-prompt").selectOption({ label: "Brief v1" });
     await page.locator("#variant-1-retrieval").selectOption("keyword");
+    await page.locator("#variant-1-rerank").check();
     await page.getByLabel("Answers at once").selectOption("2");
     await page.getByRole("button", { name: "Create and run" }).click();
 
@@ -146,7 +163,7 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
     await expect(page.locator(".recharts-bar-rectangle").first()).toBeVisible();
     await expect(page.getByTestId("variant-answer")).toHaveCount(2);
     await expect(page.getByTestId("variant-answer").first()).toContainText("E-4711");
-    await expect(page.getByRole("cell", { name: /Brief v1 · stub-model · Keyword/ })).toBeVisible();
+    await expect(page.getByRole("cell", { name: /Brief v1 · stub-model · Keyword, reranked/ })).toBeVisible();
 
     const download = page.waitForEvent("download");
     await page.getByRole("button", { name: "CSV" }).click();

@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Page, PageHeader } from "@/components/app-shell";
 import { EmbeddingSettingsCard } from "@/components/embedding-settings";
+import { RerankSettingsCard } from "@/components/rerank-settings";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -100,6 +101,18 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent>
           <EmbeddingSettingsCard />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Reranking</CardTitle>
+          <CardDescription>
+            A second, closer look at the passages a search finds: a reranker reads the question with each passage and
+            puts the best first. Slower than search alone, and off by default.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RerankSettingsCard />
         </CardContent>
       </Card>
       <Card>

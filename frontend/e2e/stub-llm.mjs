@@ -5,6 +5,7 @@
 // and DeepEval through RAGForge's adapters) get an instance of it.
 // Responses stream as SSE like OpenAI's.
 // /embeddings returns word-hashing vectors, so texts that share words are close.
+// /rerank scores each document by the share of the query's words it contains.
 // Accepts only the key "stub-key".
 //
 //   node e2e/stub-llm.mjs            # listens on :9999 (STUB_LLM_PORT to change)
@@ -90,6 +91,17 @@ const server = createServer(async (req, res) => {
       data: texts.map((text, index) => ({ index, embedding: embed(text) })),
       usage: { prompt_tokens: texts.join(" ").split(/\s+/).length },
     });
+  }
+  if (req.method === "POST" && req.url?.endsWith("/rerank")) {
+    const { query, documents } = await readJson(req);
+    const words = new Set(String(query).toLowerCase().match(/\w+/g) ?? []);
+    const results = documents.map((doc, index) => {
+      const own = new Set(String(doc).toLowerCase().match(/\w+/g) ?? []);
+      const shared = [...words].filter((w) => own.has(w)).length;
+      return { index, relevance_score: words.size ? shared / words.size : 0 };
+    });
+    results.sort((a, b) => b.relevance_score - a.relevance_score);
+    return json(res, 200, { id: "stub-rerank", results });
   }
   if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) return json(res, 404, { error: { message: "Not found" } });
   if (LATENCY_MS > 0) await new Promise((resolve) => setTimeout(resolve, LATENCY_MS));

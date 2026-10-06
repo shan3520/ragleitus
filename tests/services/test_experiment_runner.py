@@ -246,11 +246,41 @@ def test_retrieval_strategies_are_passed_through(env):
     seen = []
 
     def recording_retriever(session_, user_id, question, **kwargs):
-        seen.append((kwargs["strategy"], kwargs["k"], kwargs["document_ids"]))
+        seen.append((kwargs["strategy"], kwargs["k"], kwargs["document_ids"], kwargs["rerank"]))
         return []
 
     run(experiment.id, retriever=recording_retriever)
-    assert sorted(set(seen)) == [("hybrid", settings.retrieval_top_k, None), ("keyword", 2, None)]
+    assert sorted(set(seen)) == [("hybrid", settings.retrieval_top_k, None, False), ("keyword", 2, None, False)]
+
+
+def test_a_variant_can_rerank_and_is_checked_again_before_a_run(env):
+    from app.services import reranking
+
+    session, user, run = env
+    reranking.save_choice(session, user.id, "local", None)
+    session.commit()
+    experiment = _create(session, user, variants=[
+        {"label": "Fused", "provider": "openai"},
+        {"label": "Reranked", "provider": "openai", "rerank": True},
+    ])
+    seen = []
+
+    def recording_retriever(session_, user_id, question, **kwargs):
+        seen.append(kwargs["rerank"])
+        return []
+
+    run(experiment.id, retriever=recording_retriever)
+    assert sorted(set(seen)) == [False, True]
+    described = experiment_service.describe(session, session.get(Experiment, experiment.id))
+    assert [v["rerank"] for v in described["variants"]] == [False, True]
+    _, rows = experiment_service.export_rows(session, user.id, experiment.id)
+    assert {row["variant"]: row["reranked"] for row in rows} == {"Fused": False, "Reranked": True}
+
+    # Reranking turned off since: the variant can't run as labelled.
+    reranking.save_choice(session, user.id, "none", None)
+    session.commit()
+    with pytest.raises(ExperimentError, match="Reranked: turn on reranking in Settings first"):
+        experiment_service.start_run(session, user.id, experiment.id)
 
 
 # ---------------------------------------------------------------- create and run
@@ -281,6 +311,7 @@ def test_variants_and_questions_are_checked(env):
         ({"variants": [{**base, "prompt_version_id": foreign.versions[0].id}]}, "prompt version not found"),
         ({"document_ids": [987654]}, "documents were not found"),
         ({"judge_provider": "anthropic"}, "Judge: no API key"),
+        ({"variants": [{**base, "rerank": True}]}, "turn on reranking in Settings first"),
         ({"concurrency": 0}, "Concurrency must be between 1 and 16"),
         ({"concurrency": 17}, "Concurrency must be between 1 and 16"),
     ]:
@@ -470,3 +501,33 @@ def test_a_run_replaced_while_running_concurrently_stops_the_rest(request, datab
     assert session.query(ExperimentResult).count() <= 2
     assert len(calls) < 24
     assert session.get(Experiment, experiment.id).status == "running"  # the newer run's
+
+
+def test_a_reranker_that_fails_in_an_experiment_is_noted_on_the_result(env, monkeypatch):
+    from app.services import reranking
+    from app.services.rerankers import FakeReranker
+
+    session, user, run = env
+    reranking.save_choice(session, user.id, "local", None)
+    session.commit()
+    experiment = _create(session, user, evaluate=False, variants=[{"label": "Reranked", "provider": "openai", "rerank": True}])
+
+    class Throttled(FakeReranker):
+        calls_made = 0
+
+        def rerank(self, query, passages):
+            type(self).calls_made += 1
+            if type(self).calls_made == 1:  # the first call is rate limited, then it works
+                raise ProviderError("Together AI returned HTTP 429: slow down", 429)
+            if "annual leave" in query:
+                raise ProviderError("Together AI returned HTTP 400: passage too long", 400)
+            return super().rerank(query, passages)
+
+    monkeypatch.setattr(reranking, "build_reranker", lambda s, u, c: Throttled())
+    run(experiment.id)
+
+    results = {r.case_index: r for r in session.query(ExperimentResult)}
+    assert results[0].error is None and results[0].answer  # retried after the 429
+    assert results[1].answer  # still answered, with the passages in their fused order...
+    assert results[1].error.startswith("Passages could not be reranked")  # ...and says so
+    assert "HTTP 400: passage too long" in results[1].error

@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     embedding_backend: Literal["fastembed", "fake"] = "fastembed"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_cache_dir: str | None = None
+    # The server's own reranker (see app.services.rerankers), offered to users
+    # as "local". "fake" scores by shared words, for tests. Its model is cached
+    # in EMBEDDING_CACHE_DIR too.
+    rerank_backend: Literal["fastembed", "fake"] = "fastembed"
+    local_rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    # Fused candidates handed to the reranker; the best top_k of them are kept.
+    rerank_candidates: int = 20
 
     # Background work. "inline" runs indexing in the API process after the
     # response (no extra services); "celery" sends it to workers through Redis.

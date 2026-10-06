@@ -30,12 +30,13 @@ interface VariantRow {
   model: string;
   retrieval: RetrievalStrategy;
   topK: string;
+  rerank: boolean;
 }
 
 let nextKey = 1;
 
 function newRow(provider: string, label: string): VariantRow {
-  return { key: nextKey++, label, promptVersionId: "", provider, model: "", retrieval: "hybrid", topK: "" };
+  return { key: nextKey++, label, promptVersionId: "", provider, model: "", retrieval: "hybrid", topK: "", rerank: false };
 }
 
 function VariantFields({
@@ -125,6 +126,15 @@ function VariantFields({
           onChange={(e) => onChange({ ...row, topK: e.target.value })}
         />
       </div>
+      <label className="flex items-center gap-2 text-sm sm:col-span-2 lg:col-span-6">
+        <input
+          id={id("rerank")}
+          type="checkbox"
+          checked={row.rerank}
+          onChange={(e) => onChange({ ...row, rerank: e.target.checked })}
+        />
+        Rerank the passages (with the reranker chosen in Settings)
+      </label>
     </fieldset>
   );
 }
@@ -172,6 +182,7 @@ function NewExperiment({ providers, prompts }: { providers: Provider[]; prompts:
           model: r.model || undefined,
           retrieval: r.retrieval,
           top_k: r.topK ? Number(r.topK) : undefined,
+          rerank: r.rerank,
         })),
       });
       router.push(`/experiments/${experiment.id}`);

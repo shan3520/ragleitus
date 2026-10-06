@@ -56,6 +56,10 @@ INDEXING = Counter("ragforge_indexing_total", "Document index runs by outcome.",
 INDEXING_DURATION = Histogram(
     "ragforge_indexing_duration_seconds", "Time to chunk, embed and store a document.", buckets=LATENCY_BUCKETS
 )
+RERANK_DURATION = Histogram(
+    "ragforge_rerank_duration_seconds", "Time to rerank retrieved passages.", ["backend"],
+    buckets=LATENCY_BUCKETS,
+)
 RETRIEVAL_DURATION = Histogram(
     "ragforge_retrieval_duration_seconds", "Time to retrieve passages for a question.", ["strategy"],
     buckets=LATENCY_BUCKETS,
@@ -173,6 +177,6 @@ def multiprocess_dir() -> str | None:
 
 __all__ = [
     "DocumentQueueCollector", "Gauge", "HTTP_DURATION", "HTTP_REQUESTS", "INDEXING", "INDEXING_DURATION",
-    "RETRIEVAL_DURATION", "model_label", "multiprocess_dir", "multiprocess_registry", "observe_llm_call",
+    "RERANK_DURATION", "RETRIEVAL_DURATION", "model_label", "multiprocess_dir", "multiprocess_registry", "observe_llm_call",
     "start_server",
 ]

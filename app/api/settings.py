@@ -1,4 +1,5 @@
-"""Per-user settings: which embedding model new documents are embedded with."""
+"""Per-user settings: which embedding model new documents are embedded with,
+and which reranker (if any) reranks retrieved passages."""
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.database import get_db
 from app.models.user import User
-from app.services import embedding_service, ingestion
+from app.services import embedding_service, ingestion, reranking
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -16,6 +17,11 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 class EmbeddingSettingsUpdate(BaseModel):
     provider: str = Field(min_length=1, max_length=100, description='"local" or a provider you have a key for')
     model: str | None = Field(default=None, max_length=255, description="Embedding model; the provider's default if omitted")
+
+
+class RerankSettingsUpdate(BaseModel):
+    provider: str = Field(min_length=1, max_length=100, description='"none", "local" or a provider you have a key for')
+    model: str | None = Field(default=None, max_length=255, description="Reranking model; the provider's default if omitted")
 
 
 class ReindexRequest(BaseModel):
@@ -66,3 +72,28 @@ def reindex_for_embeddings(
     for document_id in queued:
         ingestion.schedule_indexing(document_id, background_tasks)
     return {"queued": len(queued), "document_ids": queued}
+
+
+@router.get("/reranking")
+def get_rerank_settings(user: User = Depends(get_current_user), session: Session = Depends(get_db)):
+    """Your reranking choice and the choices available."""
+    return reranking.describe(session, user.id)
+
+
+@router.put("/reranking")
+def update_rerank_settings(
+    payload: RerankSettingsUpdate,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+):
+    """Rerank retrieved passages with this reranker from now on ("none" turns it off).
+
+    The choice is checked by reranking a short text with it first.
+    """
+    try:
+        reranking.save_choice(session, user.id, payload.provider, payload.model)
+    except reranking.RerankSettingsError as exc:
+        session.commit()  # keep the telemetry of the check
+        raise HTTPException(status_code=400, detail=str(exc))
+    session.commit()
+    return reranking.describe(session, user.id)

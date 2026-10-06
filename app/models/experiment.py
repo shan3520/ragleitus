@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import relationship
 
 from .evaluation import Base
@@ -68,6 +68,8 @@ class ExperimentVariant(Base):
     # hybrid | dense | keyword
     retrieval = Column(String(20), nullable=False, default="hybrid")
     top_k = Column(Integer, nullable=False)
+    # Rerank the retrieved passages with the user's reranker (see app.services.reranking).
+    rerank = Column(Boolean, nullable=False, default=False, server_default=false())
 
     experiment = relationship("Experiment", back_populates="variants")
     prompt_version = relationship("PromptVersion")

@@ -96,3 +96,30 @@ def test_the_wrapper_looks_like_the_provider():
     assert isinstance(provider, RetryingProvider) and provider.name == "flaky"
     assert asyncio.run(provider.list_models()) == ["m"]
     assert built == [("openai", "sk-x", None)]
+
+
+def test_rerank_calls_are_retried_on_rate_limits_only():
+    from app.services.llm.retry import RetryingReranker
+
+    class Inner:
+        provider, calls = "together", ["seen"]
+
+        def __init__(self, errors):
+            self.errors, self.asked = list(errors), 0
+
+        def rerank(self, query, passages):
+            self.asked += 1
+            if self.errors:
+                raise self.errors.pop(0)
+            return [1.0] * len(passages)
+
+    waits = []
+    inner = Inner([ProviderError("429", 429, retry_after=0.5)])
+    reranker = RetryingReranker(inner, sleep=waits.append)
+    assert reranker.rerank("q", ["a", "b"]) == [1.0, 1.0] and inner.asked == 2 and waits == [0.0]
+    assert reranker.provider == "together" and reranker.calls == ["seen"]  # looks like the inner one
+
+    inner = Inner([ProviderError("bad", 400)])
+    with pytest.raises(ProviderError):
+        RetryingReranker(inner, sleep=waits.append).rerank("q", ["a"])
+    assert inner.asked == 1

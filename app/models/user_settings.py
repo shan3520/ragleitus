@@ -15,6 +15,10 @@ class UserSettings(Base):
     # indexed from now on are embedded with this provider's key.
     embedding_provider = Column(String(100), nullable=False, default="local")
     embedding_model = Column(String(255), nullable=True)
+    # Reranking of retrieved passages: "none" (off), "local" (the server's own
+    # cross-encoder) or a provider name, used with that provider's key.
+    rerank_provider = Column(String(100), nullable=False, default="none", server_default="none")
+    rerank_model = Column(String(255), nullable=True)
     updated_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

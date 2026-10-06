@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from typing import AsyncIterator, Awaitable, Callable
 
 from app.services.llm.base import ChatMessage, ChatProvider, ProviderError, StreamEvent
@@ -83,3 +84,25 @@ def with_retries(factory: ProviderFactory) -> ProviderFactory:
         return RetryingProvider(factory(*args, **kwargs))
 
     return build
+
+
+class RetryingReranker:
+    """A reranker (see app.services.rerankers) whose calls are retried the same way."""
+
+    def __init__(self, inner, attempts: int = ATTEMPTS, sleep: Callable[[float], None] = time.sleep):
+        self.inner = inner
+        self.attempts = attempts
+        self._sleep = sleep
+
+    def __getattr__(self, attribute):
+        return getattr(self.inner, attribute)
+
+    def rerank(self, query: str, passages: list[str]) -> list[float]:
+        for attempt in range(self.attempts):
+            try:
+                return self.inner.rerank(query, passages)
+            except ProviderError as exc:
+                if not exc.is_retryable or attempt == self.attempts - 1:
+                    raise
+                self._sleep(backoff_seconds(exc, attempt))
+        raise AssertionError("unreachable")

@@ -36,7 +36,7 @@ async function forward(request: Request, { params }: { params: Promise<{ path: s
       signal: request.signal,
     } as RequestInit);
   } catch {
-    return Response.json({ detail: "The RAGForge API is not reachable." }, { status: 502 });
+    return Response.json({ detail: "The ragleitus API is not reachable." }, { status: 502 });
   }
 
   const responseHeaders = new Headers(upstream.headers);

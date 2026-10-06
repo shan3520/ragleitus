@@ -44,7 +44,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         <CardHeader>
           <div className="mb-2 flex items-center gap-2 text-base font-semibold">
             <span className="grid size-6 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">R</span>
-            RAGForge
+            ragleitus
           </div>
           <CardTitle>{isLogin ? "Sign in" : "Create an account"}</CardTitle>
           <CardDescription>

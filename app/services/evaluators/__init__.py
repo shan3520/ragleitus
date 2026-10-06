@@ -1,6 +1,6 @@
 """Evaluators: interchangeable ways of scoring an answer.
 
-- builtin: RAGForge's own LLM judge (one call, always available);
+- builtin: ragleitus's own LLM judge (one call, always available);
 - ragas: Ragas metrics, if installed (pip install ".[ragas]");
 - deepeval: DeepEval metrics, if installed (pip install ".[deepeval]").
 

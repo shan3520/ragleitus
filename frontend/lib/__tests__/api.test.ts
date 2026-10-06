@@ -81,7 +81,7 @@ describe("api.health", () => {
   });
 
   it("still rejects when the API itself is unreachable", async () => {
-    mockFetch(502, { detail: "The RAGForge API is not reachable." });
+    mockFetch(502, { detail: "The ragleitus API is not reachable." });
     await expect(api.health()).rejects.toMatchObject({ status: 502 });
   });
 });

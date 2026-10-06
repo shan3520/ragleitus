@@ -1,4 +1,4 @@
-"""Live tests: RAGForge's provider adapters against the real services.
+"""Live tests: ragleitus's provider adapters against the real services.
 
 They cost a little money and need keys, so they never run by default:
 `pytest` deselects them (pyproject.toml), and each provider's tests are
@@ -6,7 +6,7 @@ skipped unless its key is set. Run them with
 
     OPENAI_API_KEY=... ANTHROPIC_API_KEY=... pytest -m live tests/live -v
 
-Keys are read from these environment variables (RAGFORGE itself never
+Keys are read from these environment variables (RAGLEITUS itself never
 reads them; users store keys through the app):
 
     OPENAI_API_KEY  ANTHROPIC_API_KEY  GEMINI_API_KEY  GROQ_API_KEY

@@ -19,7 +19,7 @@ export default function SignedInLayout({ children }: { children: React.ReactNode
     return (
       <div className="grid h-dvh place-items-center px-4">
         <div className="flex max-w-sm flex-col items-center gap-3 text-center">
-          <p className="font-medium">Could not reach RAGForge</p>
+          <p className="font-medium">Could not reach ragleitus</p>
           <p className="text-sm text-muted-foreground">{state.message}</p>
           <div className="flex gap-2">
             <Button onClick={retry}>Try again</Button>

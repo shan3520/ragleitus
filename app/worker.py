@@ -28,14 +28,14 @@ from app.core.config import settings
 # Tasks run in child processes; their metrics go through files that the main
 # process's metrics server merges. Must be set before prometheus_client loads.
 if settings.metrics_port and not os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
-    os.environ["PROMETHEUS_MULTIPROC_DIR"] = tempfile.mkdtemp(prefix="ragforge-metrics-")
+    os.environ["PROMETHEUS_MULTIPROC_DIR"] = tempfile.mkdtemp(prefix="ragleitus-metrics-")
 
 from app.core import metrics, tracing  # noqa: E402
 from app.services import experiment_runner, ingestion  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-celery_app = Celery("ragforge", broker=settings.redis_url)
+celery_app = Celery("ragleitus", broker=settings.redis_url)
 celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
@@ -46,12 +46,12 @@ celery_app.conf.update(
 )
 
 
-@celery_app.task(name="ragforge.index_document")
+@celery_app.task(name="ragleitus.index_document")
 def index_document_task(document_id: int) -> None:
     ingestion.index_document(document_id)
 
 
-@celery_app.task(name="ragforge.run_experiment")
+@celery_app.task(name="ragleitus.run_experiment")
 def run_experiment_task(experiment_id: int) -> None:
     # A redelivered job finds the experiment already running and does nothing;
     # a run lost with its worker can be started again once it is stale.

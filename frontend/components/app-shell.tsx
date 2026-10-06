@@ -83,7 +83,7 @@ function Brand() {
   return (
     <Link href="/" className="flex items-center gap-2 px-2.5 text-base font-semibold tracking-tight">
       <span className="grid size-6 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">R</span>
-      RAGForge
+      ragleitus
     </Link>
   );
 }

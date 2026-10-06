@@ -27,41 +27,41 @@ logger = logging.getLogger(__name__)
 LATENCY_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120)
 
 HTTP_REQUESTS = Counter(
-    "ragforge_http_requests_total", "HTTP requests handled by the API.", ["method", "route", "status"]
+    "ragleitus_http_requests_total", "HTTP requests handled by the API.", ["method", "route", "status"]
 )
 HTTP_DURATION = Histogram(
-    "ragforge_http_request_duration_seconds", "Time to handle an HTTP request.", ["method", "route"],
+    "ragleitus_http_request_duration_seconds", "Time to handle an HTTP request.", ["method", "route"],
     buckets=LATENCY_BUCKETS,
 )
 LLM_CALLS = Counter(
-    "ragforge_llm_calls_total", "Calls to LLM providers.", ["provider", "model", "operation", "status"]
+    "ragleitus_llm_calls_total", "Calls to LLM providers.", ["provider", "model", "operation", "status"]
 )
 LLM_LATENCY = Histogram(
-    "ragforge_llm_latency_seconds", "Duration of successful LLM calls.", ["provider", "operation"],
+    "ragleitus_llm_latency_seconds", "Duration of successful LLM calls.", ["provider", "operation"],
     buckets=LATENCY_BUCKETS,
 )
 LLM_TTFT = Histogram(
-    "ragforge_llm_time_to_first_token_seconds", "Time to the first streamed token.", ["provider"],
+    "ragleitus_llm_time_to_first_token_seconds", "Time to the first streamed token.", ["provider"],
     buckets=LATENCY_BUCKETS,
 )
 LLM_TOKENS = Counter(
-    "ragforge_llm_tokens_total", "Tokens sent to and received from LLM providers.",
+    "ragleitus_llm_tokens_total", "Tokens sent to and received from LLM providers.",
     ["provider", "model", "operation", "kind"],
 )
 LLM_COST = Counter(
-    "ragforge_llm_cost_usd_total", "Estimated cost of LLM calls in US dollars (priced models only).",
+    "ragleitus_llm_cost_usd_total", "Estimated cost of LLM calls in US dollars (priced models only).",
     ["provider", "model", "operation"],
 )
-INDEXING = Counter("ragforge_indexing_total", "Document index runs by outcome.", ["outcome"])
+INDEXING = Counter("ragleitus_indexing_total", "Document index runs by outcome.", ["outcome"])
 INDEXING_DURATION = Histogram(
-    "ragforge_indexing_duration_seconds", "Time to chunk, embed and store a document.", buckets=LATENCY_BUCKETS
+    "ragleitus_indexing_duration_seconds", "Time to chunk, embed and store a document.", buckets=LATENCY_BUCKETS
 )
 RERANK_DURATION = Histogram(
-    "ragforge_rerank_duration_seconds", "Time to rerank retrieved passages.", ["backend"],
+    "ragleitus_rerank_duration_seconds", "Time to rerank retrieved passages.", ["backend"],
     buckets=LATENCY_BUCKETS,
 )
 RETRIEVAL_DURATION = Histogram(
-    "ragforge_retrieval_duration_seconds", "Time to retrieve passages for a question.", ["strategy"],
+    "ragleitus_retrieval_duration_seconds", "Time to retrieve passages for a question.", ["strategy"],
     buckets=LATENCY_BUCKETS,
 )
 
@@ -123,7 +123,7 @@ class DocumentQueueCollector:
 
         from app.models.document import Document
 
-        gauge = GaugeMetricFamily("ragforge_documents_queued", "Documents pending or indexing.", labels=["status"])
+        gauge = GaugeMetricFamily("ragleitus_documents_queued", "Documents pending or indexing.", labels=["status"])
         session = self._session_factory()
         try:
             counts = dict(

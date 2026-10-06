@@ -295,4 +295,4 @@ def test_a_library_prompt_replaces_the_built_in_one():
     sources = [chat_service.RetrievedChunk(1, 1, "hr", 2, "Leave is 25 days.", 0.5, 1, 1)]
     messages = chat_service.build_prompt([], "How much leave?", sources, "Be brief about: {question}\n{context}")
     assert messages[0].content.startswith("Be brief about: How much leave?\n[1] (hr, page 2)\nLeave is 25 days.")
-    assert chat_service.build_prompt([], "Q", sources)[0].content.startswith("You are RAGForge")
+    assert chat_service.build_prompt([], "Q", sources)[0].content.startswith("You are ragleitus")

@@ -1,6 +1,6 @@
 # Northwind Robotics — Employee Handbook (sample)
 
-This is sample data for trying RAGForge. Upload it, then ask questions such as
+This is sample data for trying ragleitus. Upload it, then ask questions such as
 "How many days of annual leave do I get?" or "What is the on-call allowance?".
 
 ## Time off

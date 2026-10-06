@@ -43,14 +43,14 @@ def test_the_key_is_accepted(live):
 
 # Keys in each provider's format that no provider will accept.
 MADE_UP_KEYS = {
-    "openai": "sk-ragforgeLiveTestNotARealKey0000000000",
-    "anthropic": "sk-ant-ragforge-live-test-not-a-real-key-0000",
-    "gemini": "AIzaRagforgeLiveTestNotARealKey00000000",
-    "groq": "gsk_ragforgeLiveTestNotARealKey0000000000000000000",
-    "openrouter": "sk-or-v1-ragforgelivetestnotarealkey000000000000000000000000",
-    "nvidia": "nvapi-ragforgeLiveTestNotARealKey00000000000000000000000000",
-    "together": "ragforgelivetestnotarealkey0000000000000000000000000000000000",
-    "mistral": "RagforgeLiveTestNotARealKey00000",
+    "openai": "sk-ragleitusLiveTestNotARealKey0000000000",
+    "anthropic": "sk-ant-ragleitus-live-test-not-a-real-key-0000",
+    "gemini": "AIzaRagleitusLiveTestNotARealKey00000000",
+    "groq": "gsk_ragleitusLiveTestNotARealKey0000000000000000000",
+    "openrouter": "sk-or-v1-ragleituslivetestnotarealkey000000000000000000000000",
+    "nvidia": "nvapi-ragleitusLiveTestNotARealKey00000000000000000000000000",
+    "together": "ragleituslivetestnotarealkey0000000000000000000000000000000000",
+    "mistral": "RagleitusLiveTestNotARealKey00000",
 }
 
 

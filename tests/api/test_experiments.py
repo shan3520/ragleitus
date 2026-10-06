@@ -71,7 +71,7 @@ def test_chat_answers_with_the_chosen_prompt_until_changed():
     assert ask(prompt_version_id=version_id).startswith("Talk like a pirate.")
     assert ask().startswith("Talk like a pirate.")  # kept for the conversation
     assert client.get(f"/api/conversations/{conversation}", headers=headers).json()["prompt_version_id"] == version_id
-    assert ask(prompt_version_id=None).startswith("You are RAGForge")  # back to the built-in prompt
+    assert ask(prompt_version_id=None).startswith("You are ragleitus")  # back to the built-in prompt
 
     other, _ = login(client, unique_username("exp"))
     theirs = client.post("/api/conversations", json={}, headers=other).json()["id"]

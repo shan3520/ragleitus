@@ -9,7 +9,7 @@ export default async function globalSetup() {
   }
   if (status !== 200) {
     throw new Error(
-      `The RAGForge API is not reachable through ${base}/backend (status ${status || "none"}). ` +
+      `The ragleitus API is not reachable through ${base}/backend (status ${status || "none"}). ` +
         "Start it first (see Frontend > End-to-end tests in the README).",
     );
   }

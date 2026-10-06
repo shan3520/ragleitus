@@ -2,7 +2,7 @@
 
 Prometheus and Grafana only find out about a renamed metric when an alert
 silently stops firing or a panel goes blank, so check here that every
-ragforge_* series they use is one app/core/metrics.py defines.
+ragleitus_* series they use is one app/core/metrics.py defines.
 """
 
 import json
@@ -26,12 +26,12 @@ def _defined_series() -> set[str]:
             names.add(f"{value._name}_total")
         elif isinstance(value, Histogram):
             names |= {f"{value._name}_bucket", f"{value._name}_sum", f"{value._name}_count"}
-    names.add("ragforge_documents_queued")  # DocumentQueueCollector, at scrape time
+    names.add("ragleitus_documents_queued")  # DocumentQueueCollector, at scrape time
     return names
 
 
 def _series_in(expression: str) -> set[str]:
-    return set(re.findall(r"\bragforge_[a-z_]+", expression))
+    return set(re.findall(r"\bragleitus_[a-z_]+", expression))
 
 
 def _alert_rules() -> list[dict]:
@@ -44,14 +44,14 @@ def test_every_alert_uses_defined_metrics_and_explains_itself():
     rules = _alert_rules()
     assert len(rules) >= 7
     for rule in rules:
-        assert rule["alert"].startswith("Ragforge"), rule
+        assert rule["alert"].startswith("Ragleitus"), rule
         used = _series_in(rule["expr"])
         assert used <= defined, f"{rule['alert']} uses undefined series {used - defined}"
         assert rule["labels"]["severity"] in ("critical", "warning")
         assert rule["annotations"]["summary"] and rule["annotations"]["description"]
     assert {r["alert"] for r in rules} >= {
-        "RagforgeApiDown", "RagforgeWorkerDown", "RagforgeHighErrorRate", "RagforgeSlowRequests",
-        "RagforgeLlmErrors", "RagforgeIndexingFailures", "RagforgeIndexingStalled",
+        "RagleitusApiDown", "RagleitusWorkerDown", "RagleitusHighErrorRate", "RagleitusSlowRequests",
+        "RagleitusLlmErrors", "RagleitusIndexingFailures", "RagleitusIndexingStalled",
     }
 
 
@@ -79,7 +79,7 @@ def test_prometheus_loads_the_rules_and_sends_alerts_to_alertmanager():
 
 def test_every_dashboard_panel_uses_defined_metrics():
     defined = _defined_series()
-    dashboard = json.loads((DOCKER / "grafana" / "dashboards" / "ragforge.json").read_text())
+    dashboard = json.loads((DOCKER / "grafana" / "dashboards" / "ragleitus.json").read_text())
     for panel in dashboard["panels"]:
         for target in panel.get("targets", []):
             used = _series_in(target["expr"])

@@ -8,7 +8,7 @@ store and a deterministic fake embedder. No external services are needed.
 import os
 import tempfile
 
-_tmpdir = tempfile.mkdtemp(prefix="ragforge-tests-")
+_tmpdir = tempfile.mkdtemp(prefix="ragleitus-tests-")
 
 os.environ["DATABASE_URL"] = f"sqlite:///{os.path.join(_tmpdir, 'test.db')}"
 os.environ["JWT_SECRET"] = "test-jwt-secret-not-for-production"

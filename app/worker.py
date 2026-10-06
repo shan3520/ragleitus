@@ -1,5 +1,8 @@
 """Celery worker: runs document indexing and experiments outside the API process.
 
+With METRICS_PORT set it serves Prometheus metrics (from every child
+process), and with tracing configured each child sends its spans.
+
 Used when TASK_QUEUE=celery. Start it with
 
     celery -A app.worker worker --loglevel=info
@@ -14,11 +17,21 @@ from __future__ import annotations
 
 import logging
 
+import os
+import tempfile
+
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import worker_process_init, worker_process_shutdown, worker_ready
 
 from app.core.config import settings
-from app.services import experiment_runner, ingestion
+
+# Tasks run in child processes; their metrics go through files that the main
+# process's metrics server merges. Must be set before prometheus_client loads.
+if settings.metrics_port and not os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+    os.environ["PROMETHEUS_MULTIPROC_DIR"] = tempfile.mkdtemp(prefix="ragforge-metrics-")
+
+from app.core import metrics, tracing  # noqa: E402
+from app.services import experiment_runner, ingestion  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +56,27 @@ def run_experiment_task(experiment_id: int) -> None:
     # A redelivered job finds the experiment already running and does nothing;
     # a run lost with its worker can be started again once it is stale.
     experiment_runner.run_experiment(experiment_id)
+
+
+@worker_process_init.connect
+def _start_tracing(**_kwargs) -> None:
+    # Per child process: the exporter's background thread does not survive a fork.
+    tracing.setup_tracing(f"{settings.otel_service_name}-worker")
+
+
+@worker_process_shutdown.connect
+def _flush_tracing(pid=None, **_kwargs) -> None:
+    tracing.shutdown_tracing()
+    if metrics.multiprocess_dir():
+        from prometheus_client import multiprocess
+
+        multiprocess.mark_process_dead(pid or os.getpid())
+
+
+@worker_ready.connect
+def _serve_metrics(**_kwargs) -> None:
+    if settings.metrics_port and metrics.multiprocess_dir():
+        metrics.start_server(settings.metrics_port, metrics.multiprocess_registry())
 
 
 @worker_ready.connect

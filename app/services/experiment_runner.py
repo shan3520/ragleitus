@@ -34,6 +34,7 @@ from typing import Callable, TypedDict
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
+from app.core import tracing
 from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models.experiment import Experiment, ExperimentResult, ExperimentVariant
@@ -239,12 +240,23 @@ def build_graph(
     def after_generate(state: CaseState) -> str:
         return "record" if state.get("error") else "evaluate"
 
+    def traced(name: str, node):
+        # One span per pipeline step, inside the case's span (see run_experiment).
+        def run(state: CaseState) -> dict:
+            with tracing.span(f"experiment.{name}") as current:
+                update = node(state)
+                if update.get("error"):
+                    current.set_attribute("experiment.error", update["error"][:500])
+                return update
+
+        return run
+
     graph = StateGraph(CaseState)
-    graph.add_node("retrieve", retrieve_node)
-    graph.add_node("assemble_prompt", assemble_prompt_node)
-    graph.add_node("generate", generate_node)
-    graph.add_node("evaluate", evaluate_node)
-    graph.add_node("record", record_node)
+    graph.add_node("retrieve", traced("retrieve", retrieve_node))
+    graph.add_node("assemble_prompt", traced("assemble_prompt", assemble_prompt_node))
+    graph.add_node("generate", traced("generate", generate_node))
+    graph.add_node("evaluate", traced("evaluate", evaluate_node))
+    graph.add_node("record", traced("record", record_node))
     graph.add_edge(START, "retrieve")
     graph.add_conditional_edges("retrieve", after_retrieve, ["assemble_prompt", "record"])
     graph.add_edge("assemble_prompt", "generate")
@@ -287,14 +299,20 @@ def run_experiment(
             graph = build_graph(session, experiment, token, factory, retriever)
             for case_index, case in enumerate(experiment.cases or []):
                 for variant in experiment.variants:
-                    graph.invoke(
-                        {
-                            "case_index": case_index,
-                            "question": case["question"],
-                            "reference": case.get("reference_answer"),
-                            "variant_id": variant.id,
-                        }
-                    )
+                    with tracing.span(
+                        "experiment.case", experiment__id=experiment.id, experiment__case=case_index,
+                        experiment__variant=variant.label, gen_ai__system=variant.provider,
+                        gen_ai__request__model=variant.model, retrieval__strategy=variant.retrieval,
+                        user__id=str(experiment.user_id),
+                    ):
+                        graph.invoke(
+                            {
+                                "case_index": case_index,
+                                "question": case["question"],
+                                "reference": case.get("reference_answer"),
+                                "variant_id": variant.id,
+                            }
+                        )
             status, error = "completed", None
         except _Superseded:
             logger.info("Experiment run superseded", extra={"experiment_id": experiment_id})

@@ -4,6 +4,12 @@
 #   docker compose up --build
 # Open http://localhost:3000. The API also listens on http://localhost:8000
 # (Swagger UI at /docs).
+#
+# Monitoring (Prometheus, Grafana, Jaeger) is an optional profile:
+#   docker compose --profile observability up --build
+# Grafana: http://localhost:3001 (admin / GRAFANA_ADMIN_PASSWORD, default
+# "admin"). Prometheus: http://localhost:9090. Traces in Jaeger at
+# http://localhost:16686 once .env has OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318.
 
 services:
   postgres:
@@ -46,6 +52,8 @@ services:
       VECTOR_STORE_URL: http://qdrant:6333
       TASK_QUEUE: celery
       REDIS_URL: redis://redis:6379/0
+      # Prometheus metrics on the internal network only (see docker/prometheus).
+      METRICS_PORT: "9464"
       # The web container (fixed address below) relays the client address for
       # signed-out requests. If you set TRUSTED_PROXIES in .env, include it.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-${RAGFORGE_WEB_IP:-172.30.231.10}}
@@ -108,6 +116,42 @@ services:
       api:
         condition: service_healthy
 
+  # --- observability profile -------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["observability"]
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/ragforge.json
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+
+  # Receives traces over OTLP when .env sets OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318.
+  jaeger:
+    image: jaegertracing/jaeger:2.9.0
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:16686:16686"
+
 networks:
   default:
     ipam:
@@ -121,3 +165,5 @@ volumes:
   redis-data:
   qdrant-data:
   model-cache:
+  prometheus-data:
+  grafana-data:

@@ -26,6 +26,9 @@ from typing import AsyncIterator, Callable
 
 from sqlalchemy.orm import Session
 
+from opentelemetry.trace import Status, StatusCode
+
+from app.core import tracing
 from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models.conversation import Conversation, Message
@@ -358,6 +361,19 @@ def _store_answer(
 async def stream_turn(turn: PreparedTurn, session_factory: Callable[[], Session] = SessionLocal) -> AsyncIterator[tuple[str, dict]]:
     """Yield ("token", {...}) events, then ("citations", {...}) and ("done", {...}),
     or a single ("error", {...}) if the provider call fails."""
+    generation = tracing.start_span(
+        "rag.generate",
+        gen_ai__operation__name="chat", gen_ai__system=turn.provider_name, gen_ai__request__model=turn.model,
+        user__id=str(turn.user_id), session__id=str(turn.conversation_id), rag__sources=len(turn.sources),
+    )
+    try:
+        async for name, data in _stream_turn(turn, session_factory, generation):
+            yield name, data
+    finally:
+        generation.end()
+
+
+async def _stream_turn(turn: PreparedTurn, session_factory, generation) -> AsyncIterator[tuple[str, dict]]:
     started = time.perf_counter()
     ttft_ms = None
     parts: list[str] = []
@@ -365,6 +381,7 @@ async def stream_turn(turn: PreparedTurn, session_factory: Callable[[], Session]
     served_model = None
     finish_reason = None
     prompt_text = "\n\n".join(m.content for m in turn.prompt)
+    tracing.record_content(generation, prompt=prompt_text)
 
     try:
         async for event in turn.provider.stream(turn.prompt, turn.model, settings.llm_max_output_tokens):
@@ -376,6 +393,7 @@ async def stream_turn(turn: PreparedTurn, session_factory: Callable[[], Session]
             else:
                 usage, served_model, finish_reason = event.usage, event.model, event.finish_reason
     except ProviderError as exc:
+        generation.set_status(Status(StatusCode.ERROR, exc.message))
         # Blocking database work runs in a thread so other streams keep flowing.
         await asyncio.to_thread(
             _record_failure, session_factory, turn, prompt_text, (time.perf_counter() - started) * 1000, exc
@@ -393,6 +411,13 @@ async def stream_turn(turn: PreparedTurn, session_factory: Callable[[], Session]
         latency_ms, ttft_ms, usage, finish_reason,
     )
 
+    tracing.set_attributes(
+        generation,
+        gen_ai__response__model=model_name, gen_ai__usage__input_tokens=prompt_tokens,
+        gen_ai__usage__output_tokens=completion_tokens, gen_ai__response__finish_reasons=[finish_reason or "unknown"],
+        rag__citations=len(citations), rag__ttft_ms=round(ttft_ms, 2) if ttft_ms is not None else None,
+    )
+    tracing.record_content(generation, completion=answer)
     yield "citations", {"citations": citations}
     yield "done", {
         "message_id": message_id,

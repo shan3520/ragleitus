@@ -17,11 +17,13 @@ memory.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core import metrics, tracing
 from app.core.config import settings
 from app.models.document import Chunk, Document
 from app.services import embedding_service, keyword_search
@@ -101,6 +103,19 @@ def retrieve(
     """
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown retrieval strategy {strategy!r}")
+    started = time.monotonic()
+    with tracing.span("rag.retrieve", retrieval__strategy=strategy, retrieval__top_k=k or settings.retrieval_top_k) as current:
+        results = _retrieve(
+            session, user_id, query, k, document_ids, embedder, store, embedder_factory, warnings, strategy
+        )
+        current.set_attribute("retrieval.results", len(results))
+        if warnings:
+            current.set_attribute("retrieval.warnings", len(warnings))
+    metrics.RETRIEVAL_DURATION.labels(strategy).observe(time.monotonic() - started)
+    return results
+
+
+def _retrieve(session, user_id, query, k, document_ids, embedder, store, embedder_factory, warnings, strategy):
     k = k or settings.retrieval_top_k
     if not query.strip():
         return []

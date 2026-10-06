@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core import metrics
 from app.models.telemetry_event import TelemetryEvent
 from app.services.llm import Usage
 from app.services.llm.pricing import estimate_cost_usd
@@ -58,6 +59,11 @@ def record_llm_call(
     )
     session.add(event)
     session.flush()
+    metrics.observe_llm_call(
+        provider=provider, model=model, operation=operation, ok=error is None,
+        latency_ms=event.latency_ms, ttft_ms=event.ttft_ms, prompt_tokens=event.prompt_tokens,
+        completion_tokens=event.completion_tokens, cost_usd=event.cost_usd,
+    )
     return event
 
 

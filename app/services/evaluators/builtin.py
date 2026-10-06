@@ -23,7 +23,7 @@ JUDGE_INSTRUCTIONS = """Score the ANSWER on a scale from 0.0 to 1.0 for each met
 - "context_precision": the fraction of CONTEXT passages that are relevant to the QUESTION.
 - "context_recall": {recall_rule}
 
-Return exactly: {{"faithfulness": number, "answer_relevancy": number, "context_precision": number, "context_recall": number or null, "rationale": "one or two sentences"}}"""
+Return exactly: {{"faithfulness": number, "answer_relevancy": number, "context_precision": number, "context_recall": {recall_type}, "rationale": "one or two sentences"}}"""
 RECALL_WITH_REFERENCE = "the fraction of facts in the REFERENCE ANSWER that can be found in the CONTEXT passages."
 RECALL_WITHOUT_REFERENCE = "null (no reference answer was given)."
 
@@ -35,7 +35,12 @@ def installed() -> bool:
 def build_judge_prompt(question: str, context: list[dict], answer: str, reference: str | None) -> list[ChatMessage]:
     passages = "\n\n".join(f"[{p['number']}] {p.get('content', p.get('snippet', ''))}" for p in context) or "(no passages)"
     parts = [
-        JUDGE_INSTRUCTIONS.format(recall_rule=RECALL_WITH_REFERENCE if reference else RECALL_WITHOUT_REFERENCE),
+        # With a reference, ask for a number only: offered "number or null", small
+        # models (ministral-8b) answered null although a reference was given.
+        JUDGE_INSTRUCTIONS.format(
+            recall_rule=RECALL_WITH_REFERENCE if reference else RECALL_WITHOUT_REFERENCE,
+            recall_type="number" if reference else "null",
+        ),
         f"QUESTION:\n{question}",
         f"CONTEXT:\n{passages}",
         f"ANSWER:\n{answer}",

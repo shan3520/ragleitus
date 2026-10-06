@@ -10,7 +10,7 @@ from app.services.embedding_service import LOCAL, EmbeddingChoice, EmbeddingSett
 from app.services.llm import ProviderError
 from app.services.provider_key import encrypt_key, save_provider_key
 from tests.fakes import FakeProviderEmbedder, provider_embedder_factory
-from tests.helpers import make_user
+from tests.helpers import hide_provider, make_user
 
 
 @pytest.fixture
@@ -40,8 +40,9 @@ def test_everyone_starts_on_the_local_model(session, user):
     described = embedding_service.describe(session, user.id)
     assert described["provider"] == LOCAL and described["key_missing"] is False
     providers = {o["provider"]: o for o in described["options"]}
-    # Only providers that offer embeddings are offered (NVIDIA only to users with its key).
-    assert {"local", "openai", "gemini", "mistral", "together", "custom"} == set(providers)
+    # Only providers that offer embeddings are offered.
+    assert {"local", "openai", "gemini", "mistral", "together", "nvidia", "custom"} == set(providers)
+    assert providers["nvidia"]["default_model"] == "nvidia/nemotron-3-embed-1b"
     assert providers["openai"]["default_model"] == "text-embedding-3-small"
     assert providers["openai"]["has_key"] is False
 
@@ -173,8 +174,9 @@ def test_record_calls_ignores_embedders_without_a_log(session, user):
     assert session.query(TelemetryEvent).count() == 1
 
 
-def test_a_provider_not_offered_for_new_keys_is_listed_only_to_users_who_have_its_key(session, user):
-    assert "nvidia" not in {o["provider"] for o in embedding_service.options(session, user.id)}
-    save_provider_key(session, user.id, "nvidia", encrypt_key("nvapi-existingkey1234"))
-    option = {o["provider"]: o for o in embedding_service.options(session, user.id)}["nvidia"]
+def test_a_provider_not_offered_for_new_keys_is_listed_only_to_users_who_have_its_key(session, user, monkeypatch):
+    hide_provider(monkeypatch, "together")
+    assert "together" not in {o["provider"] for o in embedding_service.options(session, user.id)}
+    save_provider_key(session, user.id, "together", encrypt_key("tgp-existingkey1234"))
+    option = {o["provider"]: o for o in embedding_service.options(session, user.id)}["together"]
     assert option["has_key"] is True

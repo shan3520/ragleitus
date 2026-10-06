@@ -55,10 +55,8 @@ MADE_UP_KEYS = {
 
 
 # Providers whose key check is known to accept any key (see the README).
-KNOWN_KEY_CHECK_GAPS = {
-    "nvidia": "NVIDIA's /v1/models answers without a key, so the key check accepts any key; "
-    "not fixed without an NVIDIA key to confirm a replacement",
-}
+# Strict xfails: once a gap is fixed the test fails, so the entry is removed.
+KNOWN_KEY_CHECK_GAPS: dict[str, str] = {}
 
 
 @pytest.mark.parametrize(
@@ -87,10 +85,11 @@ def test_a_made_up_key_is_rejected_as_a_bad_key_and_never_echoed(name):
 
 def test_a_streamed_answer_reports_text_and_usage(live):
     # Reasoning models (gpt-oss on Groq, Gemini 2.5) count their reasoning in
-    # max_tokens: with 64, gpt-oss-120b sometimes ran out before any answer.
+    # max_tokens: with 64, gpt-oss-120b sometimes ran out before any answer, and
+    # with 256 so did NVIDIA's nemotron-3-super-120b-a12b (1 run in 6). Chat allows 16000.
     async def collect():
         events = []
-        async for event in live.provider().stream(build_prompt([], "Reply with the single word: ready", []), live.model, 256):
+        async for event in live.provider().stream(build_prompt([], "Reply with the single word: ready", []), live.model, 1024):
             events.append(event)
         return events
 

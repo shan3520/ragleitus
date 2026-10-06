@@ -24,6 +24,7 @@ class OpenAICompatibleProvider:
         url_guard: Callable[[str], Awaitable[None]] | None = None,
         expose_error_body: bool = True,
         models_path: str = "/models",
+        key_check_url: str | None = None,
     ):
         self.name = name
         self._api_key = api_key
@@ -34,6 +35,8 @@ class OpenAICompatibleProvider:
         self._url_guard = url_guard
         self._expose_error_body = expose_error_body
         self._models_path = models_path
+        # A URL that needs the key, for providers whose model list does not (NVIDIA).
+        self._key_check_url = key_check_url
 
     async def _check_url(self) -> None:
         if self._url_guard is not None:
@@ -92,6 +95,9 @@ class OpenAICompatibleProvider:
         await self._check_url()
         try:
             async with make_client(self._transport) as client:
+                if self._key_check_url:
+                    check = await client.get(self._key_check_url, headers=self._headers())
+                    await raise_for_status(check, self.name, include_body=self._expose_error_body)
                 response = await client.get(f"{self._base_url}{self._models_path}", headers=self._headers())
                 await raise_for_status(response, self.name, include_body=self._expose_error_body)
                 payload = response.json()

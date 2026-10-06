@@ -69,6 +69,15 @@ def test_a_quota_that_will_not_come_back_soon_is_not_retried():
     assert exc.value.retry_after == 64791.0 and provider.calls == 1 and waits == []
 
 
+def test_an_error_marked_not_retryable_is_not_retried():
+    # A 429 for a model the key's plan does not include (see http.no_allowance).
+    provider = Flaky([ProviderError("429", 429, retryable=False)])
+    _, waits, call = _run(provider)
+    with pytest.raises(ProviderError):
+        call()
+    assert provider.calls == 1 and waits == []
+
+
 def test_it_gives_up_after_the_last_attempt():
     provider = Flaky([ProviderError("429", 429)] * 10)
     _, waits, call = _run(provider)

@@ -53,12 +53,17 @@ class ProviderError(Exception):
     # Worth trying again after a pause: rate limited, overloaded, or briefly down.
     RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
 
-    def __init__(self, message: str, status_code: int | None = None, retry_after: float | None = None):
+    def __init__(
+        self, message: str, status_code: int | None = None, retry_after: float | None = None,
+        retryable: bool | None = None,
+    ):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         # Seconds the provider asked us to wait (Retry-After), if it said.
         self.retry_after = retry_after
+        # Overrides the status code's verdict, e.g. a 429 that can never succeed.
+        self._retryable = retryable
 
     @property
     def is_auth_error(self) -> bool:
@@ -66,6 +71,8 @@ class ProviderError(Exception):
 
     @property
     def is_retryable(self) -> bool:
+        if self._retryable is not None:
+            return self._retryable
         return self.status_code in self.RETRYABLE_STATUS
 
 

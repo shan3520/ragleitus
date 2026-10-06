@@ -15,7 +15,7 @@ that remain, are in [Assumptions and limits](#assumptions-and-limits).
 | Area | What you get |
 |---|---|
 | Accounts | Register and log in (argon2 password hashing, JWT). Every document, key, conversation and metric is private to its owner. |
-| Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). NVIDIA NIM is supported but not offered for new keys until it is verified again (see [Assumptions and limits](#assumptions-and-limits)). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
+| Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, NVIDIA NIM, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
 | Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Embeddings come from a local model, or from a provider with your own key. Re-index or delete at any time. |
 | Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion, optionally reranked), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day, with CSV/JSON export. |
@@ -175,10 +175,10 @@ flowchart LR
 - **Embeddings.** By default documents are embedded by a local model
   (fastembed, no key needed). In Settings → Embeddings a user can switch to one
   of their provider keys: OpenAI (`text-embedding-3-small`), Google Gemini
-  (`gemini-embedding-001`), Mistral (`mistral-embed`), Together AI, or a
-  self-hosted OpenAI-compatible server such as Ollama (any model it serves).
-  Anthropic, Groq and OpenRouter offer no embeddings API. (NVIDIA NIM is
-  supported too, for users who already stored an NVIDIA key.)
+  (`gemini-embedding-001`), Mistral (`mistral-embed`), NVIDIA NIM
+  (`nvidia/nemotron-3-embed-1b`), Together AI, or a self-hosted
+  OpenAI-compatible server such as Ollama (any model it serves). Anthropic,
+  Groq and OpenRouter offer no embeddings API.
   - A choice is checked with one embedding call before it is saved.
   - It applies to documents indexed from then on. Each document records the
     model its vectors were made with, and a question is embedded once per model
@@ -247,11 +247,11 @@ flowchart LR
     (`LOCAL_RERANK_MODEL`, default `Xenova/ms-marco-MiniLM-L-6-v2`, about
     80 MB, downloaded on first use into `EMBEDDING_CACHE_DIR`).
   - A provider's rerank API with the user's own key: Together AI
-    (`/v1/rerank`) or a self-hosted server with a Cohere-style `/rerank`
-    endpoint (vLLM, Infinity, LocalAI). NVIDIA NIM's endpoint
-    (`ai.api.nvidia.com/v1/retrieval/.../reranking`) is implemented but
-    currently retired by NVIDIA. The choice is checked with a test call before it is
-    saved, and every call is in telemetry as `rerank`.
+    (`/v1/rerank`), NVIDIA NIM (`nvidia/llama-nemotron-rerank-vl-1b-v2` at
+    `ai.api.nvidia.com/v1/retrieval/<model>/reranking`), or a self-hosted
+    server with a Cohere-style `/rerank` endpoint (vLLM, Infinity, LocalAI).
+    The choice is checked with a test call before it is saved, and every call
+    is in telemetry as `rerank`.
   - If the reranker can't be used (key deleted, provider down), the passages
     keep their fused order and the answer says why.
   - Chat uses the setting; an experiment variant can be set to rerank or not,
@@ -509,6 +509,9 @@ model of their own (`LIVE_GEMINI_MODEL=gemini-3.1-flash-lite pytest -m live
 tests/live/test_evaluators.py`) or another provider (`LIVE_EVALUATOR_PROVIDER`).
 OpenRouter's default `openai/gpt-4o-mini` needs credits; a free account can
 test with a `:free` model through `LIVE_OPENROUTER_MODEL`.
+A Mistral plan may allow no requests at all to `mistral-small-latest` (a 429
+with `x-ratelimit-limit-req-minute: 0`, which RAGForge reports and does not
+retry); test with `LIVE_MISTRAL_MODEL=ministral-8b-latest`.
 
 Schema changes go through Alembic:
 
@@ -593,26 +596,33 @@ What is still not there:
   - **OpenRouter**: key check, streamed answer, cited answer and built-in judge
     through the free `nvidia/nemotron-3-super-120b-a12b:free`. The default
     `openai/gpt-4o-mini` is paid and was not run.
+  - **Mistral**: key check, streamed answer with usage, cited
+    answer, built-in judge, Ragas and DeepEval with `ministral-8b-latest`;
+    embeddings with `mistral-embed`. The key used allows no requests to the
+    default `mistral-small-latest` (per-minute limit 0, so its plan does not
+    include it), so the default itself was not run.
+  - **NVIDIA NIM**: key check (a made-up key is now refused),
+    streamed answer with usage, cited answer and built-in judge with
+    `nvidia/nemotron-3-super-120b-a12b`; embeddings with
+    `nvidia/nemotron-3-embed-1b`; reranking with
+    `nvidia/llama-nemotron-rerank-vl-1b-v2`.
   - **Local models**: the fastembed embedder `BAAI/bge-small-en-v1.5` and the
     cross-encoder `Xenova/ms-marco-MiniLM-L-6-v2`, also in the Docker Compose
     stack, where a chat with reranking on cited the right page.
   - **Refusing a made-up key** as an auth error, without echoing it: OpenAI,
-    Anthropic, Gemini, Groq, OpenRouter, Together AI and Mistral.
+    Anthropic, Gemini, Groq, OpenRouter, NVIDIA NIM, Together AI and Mistral.
 - **Not yet verified against the real service** (no key was available):
-  OpenAI, Anthropic and Mistral chat, embeddings and judging; Together AI
-  chat, embeddings (`BAAI/bge-base-en-v1.5`) and reranking
-  (`Salesforce/Llama-Rank-V1`); self-hosted servers.
-- **NVIDIA NIM's defaults are known to be retired.** NVIDIA answers 410 Gone
-  for the default chat model `meta/llama-3.1-70b-instruct` and embedding model
-  `nvidia/nv-embedqa-e5-v5` (end of life August 2026) and for the reranking
-  endpoint (May 2026), and its `/v1/models` answers without a key, so the key
-  check accepts any key. Until an NVIDIA key can confirm replacements, **NVIDIA
-  is not offered for new keys**: it is left out of the provider list and the
-  embedding and reranking choices, and saving a new NVIDIA key is refused with
-  the reason. Users who already stored one keep it (chat with a current model
-  chosen by name works; reranking should be expected to fail), and
-  `pytest -m live tests/live` still runs NVIDIA, so it can be verified and
-  offered again (`unavailable` in `app/services/llm/registry.py`).
+  OpenAI and Anthropic chat, embeddings and judging; Together AI chat,
+  embeddings (`BAAI/bge-base-en-v1.5`) and reranking
+  (`Salesforce/Llama-Rank-V1`); self-hosted servers. Mistral's default
+  `mistral-small-latest` and OpenRouter's default `openai/gpt-4o-mini` were
+  not run (see above).
+- **NVIDIA retires hosted models.** Its earlier defaults
+  (`meta/llama-3.1-70b-instruct`, `nvidia/nv-embedqa-e5-v5`,
+  `nvidia/llama-3.2-nv-rerankqa-1b-v2`) began answering 410 Gone in 2026; the
+  current ones were confirmed on 2026-10-06. NVIDIA's `/v1/models` answers
+  without a key, so its key check first lists the account's cloud functions
+  (`api.nvcf.nvidia.com/v2/nvcf/functions`), which needs one.
 
 ## License
 

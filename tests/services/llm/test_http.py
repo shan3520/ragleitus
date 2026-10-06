@@ -114,3 +114,22 @@ def test_a_google_retry_delay_in_the_body_is_the_wait():
         {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "soon"}]}})) is None
     assert google_retry_delay(httpx.Response(429, json={"error": "slow down"})) is None
     assert google_retry_delay(httpx.Response(429, text="not json")) is None
+
+
+def test_a_429_with_no_allowance_at_all_is_not_retryable():
+    # Mistral's real answer for mistral-small-latest on a plan without it.
+    headers = {"x-ratelimit-limit-req-minute": "0", "x-ratelimit-remaining-req-minute": "0"}
+    body = {"object": "error", "message": "Rate limit exceeded", "type": "rate_limited", "param": None,
+            "code": "1300", "raw_status_code": 429}
+    for include_body in (True, False):
+        with pytest.raises(ProviderError) as exc:
+            asyncio.run(raise_for_status(httpx.Response(429, headers=headers, json=body), "mistral", include_body=include_body))
+        assert exc.value.status_code == 429 and not exc.value.is_retryable and not exc.value.is_auth_error
+        assert "plan allows no requests to this model" in exc.value.message
+        assert ("Rate limit exceeded" in exc.value.message) is include_body
+
+    # An ordinary rate limit (allowance left this minute, or no header) is still retried.
+    for headers in ({"x-ratelimit-limit-req-minute": "188", "x-ratelimit-remaining-req-minute": "0"}, {}):
+        with pytest.raises(ProviderError) as exc:
+            asyncio.run(raise_for_status(httpx.Response(429, headers=headers, json=body), "mistral"))
+        assert exc.value.is_retryable and "plan allows" not in exc.value.message

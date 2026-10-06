@@ -6,7 +6,7 @@ from app.main import app
 from app.models import ProviderKey
 from app.services.llm import ProviderError
 from tests.fakes import FakeFactory, FakeProvider
-from tests.helpers import login, unique_username
+from tests.helpers import hide_provider, login, unique_username
 
 VALID_KEY = "sk-testkey1234567"
 
@@ -148,29 +148,37 @@ def test_list_providers_marks_configured_ones():
     assert providers["custom"]["requires_base_url"] is True
 
 
-def test_a_provider_not_offered_for_new_keys_is_refused_but_existing_keys_keep_working():
+def test_nvidia_is_offered_again():
+    # Hidden in PR #19; its defaults and key check were confirmed live on 2026-10-06.
+    client, headers, _ = _client()
+    providers = {p["name"]: p for p in client.get("/api/providers", headers=headers).json()}
+    assert providers["nvidia"]["default_model"] == "nvidia/nemotron-3-super-120b-a12b"
+
+
+def test_a_provider_not_offered_for_new_keys_is_refused_but_existing_keys_keep_working(monkeypatch):
     from app.models import ProviderKey
     from app.services.provider_key import encrypt_key
 
+    hide_provider(monkeypatch, "together", "Together AI is not offered for new keys (test).")
     client, headers, factory = _client()
     providers = {p["name"] for p in client.get("/api/providers", headers=headers).json()}
-    assert "nvidia" not in providers and "openai" in providers
+    assert "together" not in providers and "openai" in providers
 
-    refused = client.post("/api/provider-keys", json={"provider": "nvidia", "key": "nvapi-newkey1234"}, headers=headers)
+    refused = client.post("/api/provider-keys", json={"provider": "together", "key": "tgp-newkey1234"}, headers=headers)
     assert refused.status_code == 400
     assert "not offered for new keys" in refused.json()["detail"]
-    assert factory.created == []  # never sent to NVIDIA
+    assert factory.created == []  # never sent to the provider
 
     # A key stored before keeps working, is listed, and can be replaced.
     user_id = client.get("/auth/me", headers=headers).json()["id"]
     session = SessionLocal()
-    session.add(ProviderKey(user_id=user_id, provider="nvidia", encrypted_key=encrypt_key("nvapi-oldkey12345678")))
+    session.add(ProviderKey(user_id=user_id, provider="together", encrypted_key=encrypt_key("tgp-oldkey12345678")))
     session.commit()
     session.close()
     listed = {p["name"]: p for p in client.get("/api/providers", headers=headers).json()}
-    assert listed["nvidia"]["configured"] is True
+    assert listed["together"]["configured"] is True
     replaced = client.post(
-        "/api/provider-keys", json={"provider": "nvidia", "key": "nvapi-newkey1234", "validate": False}, headers=headers
+        "/api/provider-keys", json={"provider": "together", "key": "tgp-newkey1234", "validate": False}, headers=headers
     )
     assert replaced.status_code == 200, replaced.text
 

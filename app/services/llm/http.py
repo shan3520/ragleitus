@@ -51,6 +51,30 @@ def retry_after_seconds(headers: Mapping[str, str] | None) -> float | None:
     return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
+def google_retry_delay(response: httpx.Response) -> float | None:
+    """The wait a Google API error asks for in its body, if any.
+
+    Gemini's 429 has no Retry-After header; the wait is a google.rpc.RetryInfo
+    detail instead: {"@type": ".../google.rpc.RetryInfo", "retryDelay": "34s"}.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    for detail in details if isinstance(details, list) else []:
+        if not isinstance(detail, dict) or not str(detail.get("@type", "")).endswith("google.rpc.RetryInfo"):
+            continue
+        delay = detail.get("retryDelay")
+        if isinstance(delay, str) and delay.endswith("s"):
+            try:
+                return max(0.0, float(delay[:-1]))
+            except ValueError:
+                return None
+    return None
+
+
 def error_status(response: httpx.Response) -> int:
     """The response's status, with Google's way of rejecting a key made a 401.
 
@@ -85,6 +109,8 @@ async def raise_for_status(response: httpx.Response, provider: str, *, include_b
             f"{provider} returned HTTP {response.status_code}", status_code=response.status_code, retry_after=retry_after
         )
     await response.aread()
+    if retry_after is None:
+        retry_after = google_retry_delay(response)
     raise ProviderError(
         f"{provider} returned HTTP {response.status_code}: {_error_text(response)}",
         status_code=error_status(response),

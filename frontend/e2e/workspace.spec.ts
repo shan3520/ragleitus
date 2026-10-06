@@ -154,6 +154,9 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
   await test.step("telemetry and evaluations show the calls", async () => {
     await page.goto("/telemetry");
     await expect(page.getByRole("heading", { name: "Requests per day" })).toBeVisible();
+    const exported = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Export CSV" }).click();
+    expect((await exported).suggestedFilename()).toMatch(/^ragforge-metrics-\d{4}-\d{2}-\d{2}\.csv$/);
     await expect(page.getByRole("cell", { name: "stub-model" }).first()).toBeVisible();
 
     await page.goto("/evaluations");

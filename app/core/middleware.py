@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.core import metrics
 from app.core.client_identity import rate_limit_key
 from app.core.config import settings
 from app.core.rate_limit import RateLimiter
@@ -56,8 +57,10 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
                 "Unhandled error",
                 extra={"request_id": request_id, "path": request.url.path},
             )
+            _observe(request, 500, time.monotonic() - start)
             raise
 
+        _observe(request, response.status_code, time.monotonic() - start)
         elapsed_ms = round((time.monotonic() - start) * 1000, 2)
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
@@ -73,6 +76,14 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
             },
         )
         return response
+
+
+def _observe(request: Request, status: int, seconds: float) -> None:
+    # The route's path template, never the raw path: /api/documents/{document_id}.
+    route = request.scope.get("route")
+    template = getattr(route, "path", None) or "unmatched"
+    metrics.HTTP_REQUESTS.labels(request.method, template, str(status)).inc()
+    metrics.HTTP_DURATION.labels(request.method, template).observe(seconds)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

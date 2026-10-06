@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Download } from "lucide-react";
 
 import { Page, PageHeader } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
 import { RangeSelect, type Range } from "@/components/range-select";
 import { StatTile } from "@/components/stat-tile";
 import { TelemetryCharts } from "@/components/telemetry-charts";
@@ -22,12 +23,26 @@ export default function TelemetryPage() {
   const summary = useApi(() => api.telemetrySummary(days), [days]);
   const events = useApi(() => api.telemetryEvents(25));
   const s = summary.data;
+  const [exportError, setExportError] = useState<string | null>(null);
 
   return (
     <Page>
       <PageHeader title="Telemetry" description="Latency, token usage and cost of every LLM call made with your keys." />
-      <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <RangeSelect value={days} onChange={setDays} />
+        <div className="flex items-center gap-2">
+          {exportError && <span className="text-xs text-destructive">{exportError}</span>}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setExportError(null);
+              api.exportMetrics(days, "csv").catch((err) => setExportError(err instanceof Error ? err.message : String(err)));
+            }}
+          >
+            <Download /> Export CSV
+          </Button>
+        </div>
       </div>
 
       {summary.error && <Alert variant="destructive">{summary.error}</Alert>}

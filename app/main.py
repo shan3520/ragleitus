@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.core.config import settings
+from app.core import metrics, tracing
 from app.core.logging import setup_logging
 from app.core.middleware import RequestIDMiddleware, RateLimitMiddleware
 from app.services import ingestion
@@ -65,12 +66,30 @@ async def lifespan(app: FastAPI):
         # In-process indexing jobs die with the process, so every unfinished
         # document was interrupted by the restart: queue them again.
         _safely(lambda: ingestion.requeue_stalled(all_unfinished=True))
+    if settings.metrics_port and metrics.start_server(settings.metrics_port):
+        _register_queue_metrics()
     stop = threading.Event()
     if settings.index_sweep_minutes > 0:
         threading.Thread(target=_sweep_stalled, args=(stop,), name="index-sweep", daemon=True).start()
     yield
     stop.set()
+    tracing.shutdown_tracing()
     logger.info("Application shutting down")
+
+
+_queue_metrics_registered = False
+
+
+def _register_queue_metrics() -> None:
+    global _queue_metrics_registered
+    if _queue_metrics_registered:
+        return
+    from prometheus_client import REGISTRY
+
+    from app.db.database import SessionLocal
+
+    REGISTRY.register(metrics.DocumentQueueCollector(SessionLocal))
+    _queue_metrics_registered = True
 
 
 def create_app() -> FastAPI:
@@ -123,6 +142,9 @@ def create_app() -> FastAPI:
     app.include_router(settings_router)
     app.include_router(prompts_router)
 
+    # Traces, if an OTLP endpoint or Langfuse keys are configured.
+    if tracing.setup_tracing(f"{settings.otel_service_name}-api"):
+        tracing.instrument_app(app)
     return app
 
 app = create_app()

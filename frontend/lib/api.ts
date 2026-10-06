@@ -569,6 +569,8 @@ export const api = {
   deleteConversation: (id: number) => request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
 
   telemetrySummary: (days: number) => request<TelemetrySummary>(`/api/telemetry/summary?days=${days}`),
+  /** Usage, evaluation and activity numbers as a file (CSV or JSON). */
+  exportMetrics: (days: number, format: "csv" | "json") => download(`/api/export/metrics?days=${days}&format=${format}`),
   telemetryEvents: (limit = 50, offset = 0) =>
     request<{ items: TelemetryEvent[]; total: number }>(`/api/telemetry/events?limit=${limit}&offset=${offset}`),
 

@@ -21,9 +21,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+from opentelemetry.trace import Status, StatusCode
 from sqlalchemy import func
 from sqlalchemy.orm import Session, load_only, selectinload
 
+from app.core import tracing
 from app.models.answer_evaluation import AnswerEvaluation
 from app.models.conversation import Conversation, Message
 from app.services import embedding_service, evaluators, telemetry
@@ -189,11 +191,22 @@ async def evaluate_message(
         contexts=[p.get("content", "") for p in message.context or []],
         reference=reference,
     )
-    try:
-        scores = await score(item, prepared.judge, evaluator, prepared.embedder)
-    except EvaluationError:
-        await asyncio.to_thread(_record_failure, session, user_id, prepared)
-        raise
+    with tracing.span(
+        "rag.evaluate", evaluation__evaluator=evaluator or evaluators.DEFAULT,
+        gen_ai__system=prepared.judge.provider_name, gen_ai__request__model=prepared.judge.model,
+        user__id=str(user_id), session__id=str(message.conversation_id),
+    ) as current:
+        try:
+            scores = await score(item, prepared.judge, evaluator, prepared.embedder)
+        except EvaluationError as exc:
+            current.set_status(Status(StatusCode.ERROR, exc.message))
+            await asyncio.to_thread(_record_failure, session, user_id, prepared)
+            raise
+        tracing.set_attributes(
+            current, evaluation__faithfulness=scores.faithfulness, evaluation__answer_relevancy=scores.answer_relevancy,
+            evaluation__context_precision=scores.context_precision, evaluation__context_recall=scores.context_recall,
+            evaluation__calls=len(prepared.judge.calls),
+        )
     return await asyncio.to_thread(_store_evaluation, session, user_id, prepared, scores, reference, evaluator)
 
 

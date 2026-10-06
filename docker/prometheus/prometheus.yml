@@ -1,0 +1,17 @@
+# Scrapes RAGForge's metrics port (METRICS_PORT, 9464 in docker-compose.yml)
+# on the internal network. DNS discovery finds every worker when scaled
+# with `docker compose up --scale worker=3`.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: ragforge-api
+    dns_sd_configs:
+      - names: ["api"]
+        type: A
+        port: 9464
+  - job_name: ragforge-worker
+    dns_sd_configs:
+      - names: ["worker"]
+        type: A
+        port: 9464

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,7 @@ from fastapi import BackgroundTasks
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.core import metrics, tracing
 from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models.document import Chunk, Document
@@ -205,6 +207,23 @@ def index_document(
     store: VectorStore | None = None,
     embedder_factory: EmbedderFactory | None = None,
 ) -> None:
+    """Index a document (see _index_document), traced and counted in metrics."""
+    started = time.monotonic()
+    with tracing.span("index.document", document__id=document_id) as current:
+        outcome = _index_document(document_id, session_factory, embedder, store, embedder_factory)
+        current.set_attribute("index.outcome", outcome)
+    metrics.INDEXING.labels(outcome).inc()
+    if outcome == "ready":
+        metrics.INDEXING_DURATION.observe(time.monotonic() - started)
+
+
+def _index_document(
+    document_id: int,
+    session_factory: Callable[[], Session],
+    embedder: Embedder | None,
+    store: VectorStore | None,
+    embedder_factory: EmbedderFactory | None,
+) -> str:
     """Chunk, embed and store a document's vectors, replacing any previous index.
 
     The document is embedded with its owner's embedding choice (see
@@ -212,7 +231,8 @@ def index_document(
     `store` replace the local model and its store (tests); `embedder_factory`
     replaces how an embedder is built for the choice.
 
-    Never raises: failures are recorded on the document as status "failed"
+    Returns the outcome: ready, failed, superseded (a newer run took over)
+    or skipped (nothing to do). Never raises: failures are recorded on the document as status "failed"
     with the error, because this usually runs after the response is sent or
     in a worker.
 
@@ -229,7 +249,7 @@ def index_document(
     try:
         document = _claim(session, document_id, token)
         if document is None:
-            return
+            return "skipped"
         user_id = document.user_id
         try:
             # Where the current vectors are, before this run replaces them.
@@ -281,7 +301,7 @@ def index_document(
             session.rollback()
             _discard_vectors(new_store, new_chunk_ids, document_id)
             logger.info("Index run superseded by a newer one", extra={"document_id": document_id})
-            return
+            return "superseded"
         except Exception as exc:
             session.rollback()
             _discard_vectors(new_store, new_chunk_ids, document_id)
@@ -302,9 +322,10 @@ def index_document(
             else:
                 # Deleted or taken over by a newer run meanwhile: nothing to report.
                 logger.info("Indexing stopped; document deleted or re-queued", extra={"document_id": document_id})
-            return
+            return "failed" if failed else "superseded"
         # Committed: the old chunks are gone, so their vectors can go too.
         _discard_vectors(old_store, old_chunk_ids, document_id)
+        return "ready"
     finally:
         if used is not None and user_id is not None:
             _record_embedding_calls(session, user_id, used, document_id)

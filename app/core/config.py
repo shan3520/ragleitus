@@ -77,6 +77,21 @@ class Settings(BaseSettings):
     # calls them.
     allow_private_provider_urls: bool = False
 
+    # Observability (see app.core.metrics and app.core.tracing).
+    # Prometheus metrics on this port, separate from the API so they are never
+    # reachable through the web app's /backend proxy. 0: off.
+    metrics_port: int = 0
+    # OpenTelemetry traces over OTLP/HTTP (e.g. http://jaeger:4318). Empty: off.
+    otel_exporter_otlp_endpoint: str = ""
+    otel_service_name: str = "ragforge"
+    # Traces to Langfuse (Cloud or self-hosted) when both keys are set.
+    langfuse_public_key: SecretStr = SecretStr("")
+    langfuse_secret_key: SecretStr = SecretStr("")
+    langfuse_host: str = "https://cloud.langfuse.com"
+    # Put prompt and answer text on traces. Off: traces carry models, tokens,
+    # timings and ids only.
+    trace_content: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator("cors_origins", "trusted_proxies", mode="before")

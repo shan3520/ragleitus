@@ -26,6 +26,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
+from app.core.sanitization import spreadsheet_safe
 from app.models.document import Document
 from app.models.experiment import Experiment, ExperimentResult, ExperimentVariant
 from app.services import evaluators
@@ -480,20 +481,13 @@ def export_rows(session: Session, user_id: int, experiment_id: int) -> tuple[Exp
     return experiment, rows
 
 
-def _spreadsheet_safe(value):
-    # A cell starting with one of these is run as a formula by spreadsheet apps.
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + value
-    return value
-
-
 def export_csv(session: Session, user_id: int, experiment_id: int) -> tuple[Experiment, str]:
     experiment, rows = export_rows(session, user_id, experiment_id)
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=EXPORT_COLUMNS)
     writer.writeheader()
     for row in rows:
-        writer.writerow({k: _spreadsheet_safe(v) for k, v in row.items()})
+        writer.writerow({k: spreadsheet_safe(v) for k, v in row.items()})
     return experiment, buffer.getvalue()
 
 

@@ -4,10 +4,11 @@ A workspace for Retrieval-Augmented Generation. Upload documents, chat with them
 using the LLM provider of your choice (bring your own key), get answers with
 page-level citations, and measure latency, token usage, cost and answer quality.
 
-The target design is in [`docs/SPEC.md`](docs/SPEC.md). This repository ships
-the **API** (FastAPI, with Swagger UI) and the **web app** (Next.js, in
-[`frontend/`](frontend)). Some parts of the spec are not built yet; see
-[What is not done yet](#what-is-not-done-yet).
+The design is in [`docs/SPEC.md`](docs/SPEC.md). This repository ships the
+**API** (FastAPI, with Swagger UI), its **Celery worker** and the **web app**
+(Next.js, in [`frontend/`](frontend)), with Docker Compose for all of it and an
+optional monitoring stack. The decisions the spec left open, and the limits
+that remain, are in [Assumptions and limits](#assumptions-and-limits).
 
 ## What it does
 
@@ -17,7 +18,8 @@ the **API** (FastAPI, with Swagger UI) and the **web app** (Next.js, in
 | Providers (BYOK) | OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, NVIDIA NIM, Together AI, Mistral AI, plus any self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM). Keys are checked against the provider before they are saved, encrypted at rest, and only ever returned masked. |
 | Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Embeddings come from a local model, or from a provider with your own key. Re-index or delete at any time. |
 | Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
-| Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day. |
+| Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day, with CSV/JSON export. |
+| Observability | Prometheus metrics, OpenTelemetry traces (to any OTLP backend and to Langfuse), JSON logs with trace ids, and an optional Prometheus + Grafana + Jaeger stack with a ready-made dashboard. |
 | Prompts and experiments | A versioned prompt library you can chat with, and experiments that answer the same questions with several prompts, models and retrieval strategies and compare their quality, latency and cost (run as a LangGraph pipeline), with CSV/JSON export. |
 | Evaluation | Scoring of any answer with RAGForge's own LLM judge, Ragas or DeepEval (on your own provider): faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
 
@@ -36,6 +38,11 @@ docker compose up --build
 This starts PostgreSQL 16, Qdrant, Redis, the API, an indexing worker and the
 web app. Migrations run automatically. Open <http://localhost:3000>, create an account, add a provider
 key and upload a document. The interactive API is at <http://localhost:8000/docs>.
+
+To add monitoring, start the `observability` profile:
+`docker compose --profile observability up --build`. Grafana (with the RAGForge
+dashboard) is at <http://localhost:3001>, Prometheus at <http://localhost:9090>
+and Jaeger at <http://localhost:16686>; see [Observability](#observability).
 
 Unless you choose a provider for embeddings in Settings, the first document you
 upload triggers a one-time download of the local embedding model (`BAAI/bge-small-en-v1.5`, about 70 MB, from Hugging Face). It is cached in
@@ -138,6 +145,16 @@ flowchart LR
       q[Question] --> dense[Dense search] & keyword[Keyword search<br/>PostgreSQL full-text]
       dense & keyword --> rrf[Reciprocal rank fusion] --> prompt[Numbered passages] --> gen[Stream answer] --> cite[Resolve n citations]
       gen --> tel[Telemetry]
+    end
+
+    subgraph Experiments
+      run[Run] -. job via Redis .-> graph[LangGraph pipeline<br/>retrieve, prompt, generate,<br/>evaluate, record]
+      graph --> evaluators[Evaluator<br/>built-in judge, Ragas, DeepEval]
+    end
+
+    subgraph Observability
+      api & worker -->|METRICS_PORT| prom[(Prometheus)] --> grafana[Grafana]
+      api & worker -->|OTLP| traces[Jaeger / any OTLP backend<br/>Langfuse]
     end
 ```
 
@@ -268,6 +285,51 @@ flowchart LR
   OpenAI-compatible family, one for Gemini, and one using the official
   `anthropic` SDK. All stream text and report token usage the same way.
 
+## Observability
+
+- **Telemetry in the app.** Every LLM call (chat, evaluation, experiments,
+  embeddings) is stored with its latency, time to first token, tokens and cost,
+  and shown per model and per day on the Telemetry page.
+  `GET /api/export/metrics?days=30&format=csv|json` exports a user's usage
+  (totals, per model, per day), evaluation averages and activity counts.
+- **Prometheus metrics** (`app/core/metrics.py`) on `METRICS_PORT`, a port of
+  their own: the web app forwards `/backend/*` to the API, so a `/metrics` route
+  there would be public. They cover:
+  - requests and latency by route template;
+  - LLM calls, latency, time to first token, tokens and cost by provider, model
+    and operation;
+  - index runs by outcome and duration;
+  - retrieval latency by strategy;
+  - documents waiting to be indexed.
+
+  They carry no user ids or text, and the model label is bounded (self-hosted
+  model names are one label). The Celery worker serves the metrics of all its
+  child processes through Prometheus's multiprocess mode.
+- **Traces** (`app/core/tracing.py`) are off until configured.
+  `OTEL_EXPORTER_OTLP_ENDPOINT` sends them to any OTLP/HTTP backend (Jaeger,
+  Tempo, an OpenTelemetry Collector).
+  - `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (plus `LANGFUSE_HOST` for a
+    self-hosted Langfuse) send them to Langfuse's OTLP endpoint.
+  - Requests get server spans. `rag.retrieve`, `rag.generate`, `rag.evaluate`,
+    `index.document` and each experiment step get their own spans, with the
+    OpenTelemetry GenAI attributes (`gen_ai.system`, model, token usage) that
+    Langfuse reads as generations, and the user and conversation as
+    `user.id` and `session.id`.
+  - Prompt and answer text are added only with `TRACE_CONTENT=true`; keys never
+    are.
+- **Logs** are JSON lines with every field a log call passes (request id, path,
+  status, document id…) and the trace and span id of the active trace.
+- **Monitoring stack.** `docker compose --profile observability up` adds:
+  - Prometheus, scraping the API and every worker;
+  - Grafana, with a provisioned Prometheus data source and a RAGForge dashboard:
+    requests, errors, latency, LLM calls, cost, tokens and time to first token
+    per model, indexing and retrieval;
+  - Jaeger. Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318` in `.env` to
+    send traces to it.
+
+  Their ports are bound to `127.0.0.1`. The Grafana password is
+  `GRAFANA_ADMIN_PASSWORD` (default `admin`).
+
 ## Configuration
 
 Settings are environment variables (or `.env`). [`.env.example`](.env.example)
@@ -326,7 +388,7 @@ counted as `unpriced_requests` in the telemetry summary.
 | `POST/GET /api/prompts`, `GET/PATCH/DELETE /api/prompts/{id}`, `POST /api/prompts/{id}/versions`, `POST /api/prompts/{id}/clone`, `GET /api/prompts/default` | Prompt library |
 | `POST/GET /api/experiments`, `GET/DELETE /api/experiments/{id}`, `POST /api/experiments/{id}/run`, `GET /api/experiments/{id}/compare`, `GET /api/experiments/{id}/export?format=csv\|json`, `GET /api/experiments/report` | Experiments |
 | `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`, `POST /api/conversations/{id}/messages` | Chat |
-| `GET /api/telemetry/summary`, `GET /api/telemetry/events` | Telemetry |
+| `GET /api/telemetry/summary`, `GET /api/telemetry/events`, `GET /api/export/metrics?format=json\|csv` | Telemetry and export |
 | `POST /api/evaluations`, `GET /api/evaluations`, `GET /api/evaluators` | Evaluation |
 | `GET /health`, `GET /api/health/subsystems` | Health (no login needed) |
 
@@ -392,14 +454,44 @@ container reach the stub on the host:
 (the `api` service needs `ALLOW_PRIVATE_PROVIDER_URLS: "true"` and
 `extra_hosts: ["host.docker.internal:host-gateway"]` on Linux).
 
-## What is not done yet
+## Assumptions and limits
 
-`docs/SPEC.md` describes more than this. Still to build:
+The spec leaves these open; this is what RAGForge assumes:
 
-- **Observability stack.** No Langfuse, OpenTelemetry, Prometheus or Grafana.
-  Telemetry is stored in PostgreSQL and served by the API.
+- **Accounts are private.** Every document, key, prompt, experiment and metric
+  belongs to one user; there are no teams or shared workspaces.
+- **Evaluation runs on the user's own models.** The built-in judge, Ragas and
+  DeepEval all use a provider key the user stored, so evaluating costs the user,
+  like chatting does.
+- **Each document has one embedding model**, the one the user had chosen when it
+  was indexed. Changing the choice affects new documents until the old ones are
+  re-indexed.
+- **Keyword search is PostgreSQL full-text search** with the `simple`
+  configuration (no stemming, works in any language). Term weights come from
+  PostgreSQL's statistics over all users' chunks; results never cross users.
+- **The task queue is Celery with Redis.** The `inline` mode, which needs no
+  Redis, is for development and single-process installs.
 
-One older endpoint still returns placeholder data: `/api/export/metrics`.
+What is still not there:
+
+- **Reranking.** The spec lists it as optional. Retrieval fuses dense and
+  keyword rankings with reciprocal rank fusion; there is no cross-encoder or
+  LLM reranking step.
+- **Tested against stand-ins, not every provider.** Provider adapters and
+  embedders are tested against mocked HTTP and a stub OpenAI-compatible server
+  (the browser tests use it); they follow each provider's published API but
+  have not all been exercised against the real services here.
+- **One API process.** Rate limits live in the API's memory, so with several
+  API processes each has its own. Scale the worker instead (`--scale worker=N`),
+  or put a shared rate limiter in front.
+- **Experiments run one call at a time**, which is gentle on provider rate
+  limits but slow for large runs (up to 100 questions × 6 variants, plus the
+  evaluator's calls).
+- **Ragas and DeepEval are heavy.** They make several calls per answer and
+  roughly double the size of the API image; installs without them simply don't
+  offer them.
+- **The monitoring stack is a starting point.** Grafana ships with a dashboard
+  but no alert rules, and Jaeger keeps traces in memory.
 
 ## License
 

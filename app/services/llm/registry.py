@@ -56,7 +56,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ),
         ProviderSpec("anthropic", "Anthropic", "anthropic", "claude-opus-5-5", key_pattern=re.compile(r"^sk-ant-[A-Za-z0-9_\-]{8,}$")),
         ProviderSpec("gemini", "Google Gemini", "gemini", "gemini-2.5-flash", base_url=GEMINI_BASE_URL, key_pattern=re.compile(r"^AIza[0-9A-Za-z\-_]{20,}$"), embedding_model="gemini-embedding-001"),
-        ProviderSpec("groq", "Groq", "openai_compatible", "llama-3.3-70b-versatile", base_url="https://api.groq.com/openai/v1"),
+        ProviderSpec("groq", "Groq", "openai_compatible", "openai/gpt-oss-120b", base_url="https://api.groq.com/openai/v1"),
         ProviderSpec("openrouter", "OpenRouter", "openai_compatible", "openai/gpt-4o-mini", base_url="https://openrouter.ai/api/v1"),
         ProviderSpec(
             "nvidia", "NVIDIA NIM", "openai_compatible", "meta/llama-3.1-70b-instruct", base_url="https://integrate.api.nvidia.com/v1",

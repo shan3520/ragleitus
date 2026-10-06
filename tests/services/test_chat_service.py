@@ -72,7 +72,7 @@ def test_provider_choice(env):
         chat_service.resolve_provider_choice(session, user_id, conversation, None, None)
 
     _add_key(session, user_id, "groq")
-    assert chat_service.resolve_provider_choice(session, user_id, conversation, None, None) == ("groq", "llama-3.3-70b-versatile")
+    assert chat_service.resolve_provider_choice(session, user_id, conversation, None, None) == ("groq", "openai/gpt-oss-120b")
 
     _add_key(session, user_id, "openai")
     with pytest.raises(chat_service.ProviderChoiceError, match="Choose a provider"):

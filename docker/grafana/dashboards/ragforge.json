@@ -27,6 +27,73 @@
       "panels": []
     },
     {
+      "id": 19,
+      "type": "table",
+      "title": "Firing alerts",
+      "description": "Alerts from docker/prometheus/alerts.yml that are firing now. Alertmanager (http://localhost:9093) sends them to the receivers in docker/alertmanager/alertmanager.yml.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "ALERTS{alertstate=\"firing\"}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "alertstate": true,
+              "job": true,
+              "instance": true
+            },
+            "indexByName": {
+              "alertname": 0,
+              "severity": 1
+            },
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "Severity",
+              "provider": "Provider",
+              "route": "Route"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No alerts firing"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
       "id": 2,
       "type": "stat",
       "title": "Requests per second",
@@ -36,7 +103,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 1,
+        "y": 6,
         "w": 6,
         "h": 4
       },
@@ -78,7 +145,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 1,
+        "y": 6,
         "w": 6,
         "h": 4
       },
@@ -121,7 +188,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 1,
+        "y": 6,
         "w": 6,
         "h": 4
       },
@@ -163,7 +230,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 1,
+        "y": 6,
         "w": 6,
         "h": 4
       },
@@ -205,7 +272,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 10,
         "w": 24,
         "h": 1
       },
@@ -221,7 +288,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 6,
+        "y": 11,
         "w": 12,
         "h": 8
       },
@@ -267,7 +334,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 6,
+        "y": 11,
         "w": 12,
         "h": 8
       },
@@ -319,7 +386,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 14,
+        "y": 19,
         "w": 24,
         "h": 1
       },
@@ -335,7 +402,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 15,
+        "y": 20,
         "w": 12,
         "h": 8
       },
@@ -381,7 +448,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 15,
+        "y": 20,
         "w": 12,
         "h": 8
       },
@@ -427,7 +494,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 23,
+        "y": 28,
         "w": 8,
         "h": 8
       },
@@ -473,7 +540,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 23,
+        "y": 28,
         "w": 8,
         "h": 8
       },
@@ -521,7 +588,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 23,
+        "y": 28,
         "w": 8,
         "h": 8
       },
@@ -564,7 +631,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 31,
+        "y": 36,
         "w": 24,
         "h": 1
       },
@@ -580,7 +647,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 37,
         "w": 8,
         "h": 8
       },
@@ -626,7 +693,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 32,
+        "y": 37,
         "w": 8,
         "h": 8
       },
@@ -672,7 +739,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 32,
+        "y": 37,
         "w": 8,
         "h": 8
       },

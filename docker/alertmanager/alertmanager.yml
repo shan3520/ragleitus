@@ -1,0 +1,32 @@
+# Who hears about RAGForge's alerts (docker/prometheus/alerts.yml).
+#
+# Out of the box alerts are only collected: see them in Alertmanager
+# (http://localhost:9093) and on the Grafana dashboard. To be notified, add a
+# receiver below and point the route at it, then restart alertmanager:
+#
+#   receivers:
+#     - name: team
+#       webhook_configs:              # any HTTP endpoint (a chat bot, an incident tool)
+#         - url: https://hooks.example.com/ragforge
+#       slack_configs:
+#         - api_url: https://hooks.slack.com/services/T000/B000/XXXX
+#           channel: "#ragforge"
+#           send_resolved: true
+#       email_configs:
+#         - to: oncall@example.com
+#           from: alerts@example.com
+#           smarthost: smtp.example.com:587
+#           auth_username: alerts@example.com
+#           auth_password_file: /etc/alertmanager/smtp-password
+#
+# Keep secrets out of this file where the receiver allows (auth_password_file,
+# url_file, api_url_file), and never commit them.
+route:
+  receiver: collect-only
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: collect-only

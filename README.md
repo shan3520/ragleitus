@@ -19,7 +19,7 @@ that remain, are in [Assumptions and limits](#assumptions-and-limits).
 | Documents | Upload PDF, Markdown or text. Text is extracted and cleaned on upload, then chunked, embedded and stored in Qdrant in the background. Embeddings come from a local model, or from a provider with your own key. Re-index or delete at any time. |
 | Chat | Hybrid retrieval (dense vectors + keyword search, merged with reciprocal rank fusion, optionally reranked), streamed answers over server-sent events, `[n]` citations resolved to document and page, conversation history. |
 | Telemetry | Latency, time to first token, prompt/completion tokens and cost for every LLM call, summarised per model and per day, with CSV/JSON export. |
-| Observability | Prometheus metrics, OpenTelemetry traces (to any OTLP backend and to Langfuse), JSON logs with trace ids, and an optional Prometheus + Grafana + Jaeger stack with a ready-made dashboard. |
+| Observability | Prometheus metrics, OpenTelemetry traces (to any OTLP backend and to Langfuse), JSON logs with trace ids, and an optional Prometheus + Alertmanager + Grafana + Jaeger stack with alert rules and a ready-made dashboard. |
 | Prompts and experiments | A versioned prompt library you can chat with, and experiments that answer the same questions with several prompts, models and retrieval strategies and compare their quality, latency and cost (run as a LangGraph pipeline), with CSV/JSON export. |
 | Evaluation | Scoring of any answer with RAGForge's own LLM judge, Ragas or DeepEval (on your own provider): faithfulness, answer relevancy, context precision, context recall (with a reference answer) and hallucination rate, plus lexical baselines. |
 
@@ -46,8 +46,9 @@ For a slimmer image without them (870 MB), build with
 
 To add monitoring, start the `observability` profile:
 `docker compose --profile observability up --build`. Grafana (with the RAGForge
-dashboard) is at <http://localhost:3001>, Prometheus at <http://localhost:9090>
-and Jaeger at <http://localhost:16686>; see [Observability](#observability).
+dashboard) is at <http://localhost:3001>, Prometheus at <http://localhost:9090>,
+Alertmanager at <http://localhost:9093> and Jaeger at <http://localhost:16686>;
+see [Observability](#observability).
 
 Unless you choose a provider for embeddings in Settings, the first document you
 upload triggers a one-time download of the local embedding model (`BAAI/bge-small-en-v1.5`, about 70 MB, from Hugging Face). It is cached in
@@ -159,6 +160,7 @@ flowchart LR
 
     subgraph Observability
       api & worker -->|METRICS_PORT| prom[(Prometheus)] --> grafana[Grafana]
+      prom -->|alerts| am[Alertmanager] --> receivers[Your receivers]
       api & worker -->|OTLP| traces[Jaeger / any OTLP backend<br/>Langfuse]
     end
 ```
@@ -351,12 +353,28 @@ flowchart LR
 - **Logs** are JSON lines with every field a log call passes (request id, path,
   status, document id…) and the trace and span id of the active trace.
 - **Monitoring stack.** `docker compose --profile observability up` adds:
-  - Prometheus, scraping the API and every worker;
-  - Grafana, with a provisioned Prometheus data source and a RAGForge dashboard:
-    requests, errors, latency, LLM calls, cost, tokens and time to first token
-    per model, indexing and retrieval;
-  - Jaeger. Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318` in `.env` to
-    send traces to it.
+  - Prometheus, scraping the API and every worker, with the alert rules in
+    `docker/prometheus/alerts.yml`:
+
+    | Alert | Fires when |
+    |---|---|
+    | `RagforgeApiDown`, `RagforgeWorkerDown` | no api (or worker) has answered a scrape for 2 minutes |
+    | `RagforgeHighErrorRate` | over 5% of requests get a 5xx for 10 minutes |
+    | `RagforgeSlowRequests` | a route's p95 is over 5 s for 10 minutes (routes that wait on an LLM excepted) |
+    | `RagforgeLlmErrors` | over 20% of calls to a provider fail for 10 minutes |
+    | `RagforgeIndexingFailures` | a document failed to index in the last 15 minutes |
+    | `RagforgeIndexingStalled` | documents are waiting and none finished in 15 minutes |
+
+  - Alertmanager (<http://localhost:9093>), which collects the alerts. To be
+    notified (webhook, Slack, e-mail…), add a receiver to
+    `docker/alertmanager/alertmanager.yml`; the file has examples.
+  - Grafana, with Prometheus and Alertmanager data sources and a RAGForge
+    dashboard: firing alerts, requests, errors, latency, LLM calls, cost,
+    tokens and time to first token per model, indexing, retrieval and
+    reranking. Grafana's Alerting page lists the rules.
+  - Jaeger, keeping traces for 7 days on disk (the `jaeger-data` volume), so
+    they survive restarts. Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318`
+    in `.env` to send traces to it.
 
   Their ports are bound to `127.0.0.1`. The Grafana password is
   `GRAFANA_ADMIN_PASSWORD` (default `admin`).
@@ -520,6 +538,9 @@ The spec leaves these open; this is what RAGForge assumes:
 - **Experiments share the user's provider limits.** Running several answers at
   once is faster, but a provider with a low rate limit answers with 429s that
   the run waits out; lower an experiment's concurrency for such a provider.
+- **Monitoring is for whoever runs the server.** Alerts cover the service as a
+  whole, never individual users, and Alertmanager notifies no one until a
+  receiver is configured.
 - **Redis holds the shared rate limits** when there are several API processes.
   Losing Redis loosens them to one allowance per process for the duration,
   rather than stopping the API.
@@ -530,8 +551,6 @@ What is still not there:
   embedders are tested against mocked HTTP and a stub OpenAI-compatible server
   (the browser tests use it); they follow each provider's published API but
   have not all been exercised against the real services here.
-- **The monitoring stack is a starting point.** Grafana ships with a dashboard
-  but no alert rules, and Jaeger keeps traces in memory.
 
 ## License
 

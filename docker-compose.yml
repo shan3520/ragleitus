@@ -129,11 +129,25 @@ services:
     profiles: ["observability"]
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
     depends_on:
       - api
+      - alertmanager
+
+  # Collects the alerts Prometheus fires (docker/prometheus/alerts.yml) and
+  # sends them to the receivers in docker/alertmanager/alertmanager.yml (none
+  # until you add one).
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: ["observability"]
+    volumes:
+      - ./docker/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
 
   grafana:
     image: grafana/grafana:12.1.1
@@ -152,10 +166,15 @@ services:
     depends_on:
       - prometheus
 
-  # Receives traces over OTLP when .env sets OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318.
+  # Receives traces over OTLP when .env sets OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318,
+  # and keeps them for 7 days in the jaeger-data volume (docker/jaeger/config.yaml).
   jaeger:
     image: jaegertracing/jaeger:2.9.0
     profiles: ["observability"]
+    command: ["--config", "/etc/jaeger/config.yaml"]
+    volumes:
+      - ./docker/jaeger/config.yaml:/etc/jaeger/config.yaml:ro
+      - jaeger-data:/var/tmp
     ports:
       - "127.0.0.1:16686:16686"
 
@@ -173,4 +192,6 @@ volumes:
   qdrant-data:
   model-cache:
   prometheus-data:
+  alertmanager-data:
   grafana-data:
+  jaeger-data:

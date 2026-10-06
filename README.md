@@ -495,9 +495,18 @@ Each provider is skipped unless its key is set (`OPENAI_API_KEY`,
 `NVIDIA_API_KEY`, `TOGETHER_API_KEY`, `MISTRAL_API_KEY`). A self-hosted
 server is tested with `LIVE_CUSTOM_BASE_URL` and `LIVE_CUSTOM_MODEL`.
 `LIVE_<PROVIDER>_MODEL` (and `_EMBEDDING_MODEL`, `_RERANK_MODEL`) choose
-other models. One test needs no key: it checks that each provider refuses a
-made-up key in a way the app recognises. The app itself never reads these
-variables; users store their keys through the app.
+other models. Two need no key: one checks that each provider refuses a
+made-up key in a way the app recognises, and `test_local_models.py` runs the
+server's own embedding model and reranker, which fastembed downloads from
+Hugging Face on first use. The app itself never reads these variables; users
+store their keys through the app.
+
+Free tiers are tight. Gemini's allows 5 requests a minute and 20 a day per
+model, and Ragas and DeepEval make several calls per answer: give them a
+model of their own (`LIVE_GEMINI_MODEL=gemini-3.1-flash-lite pytest -m live
+tests/live/test_evaluators.py`) or another provider (`LIVE_EVALUATOR_PROVIDER`).
+OpenRouter's default `openai/gpt-4o-mini` needs credits; a free account can
+test with a `:free` model through `LIVE_OPENROUTER_MODEL`.
 
 Schema changes go through Alembic:
 
@@ -568,13 +577,36 @@ The spec leaves these open; this is what RAGForge assumes:
 
 What is still not there:
 
-- **Not yet run against every real provider.** Adapters, embedders and
+- **Verified against only some real providers.** Adapters, embedders and
   rerankers are tested against mocked HTTP and a stub OpenAI-compatible server,
-  and `tests/live` runs them against the real services with your keys (see
-  [Development](#development)). So far the live suite has checked how
-  Anthropic and Gemini refuse a bad key (which found and fixed Gemini's
-  400-for-a-bad-key case); the full suite still has to be run with real keys
-  for each provider.
+  and `tests/live` runs them against the real services (see
+  [Development](#development)). On 2026-10-06 the live suite passed for:
+  - **Gemini**: key check (including the `AQ.` keys AI Studio now issues),
+    streamed answer with usage, cited answer and built-in judge with
+    `gemini-2.5-flash`; embeddings with `gemini-embedding-001`; Ragas and
+    DeepEval through `gemini-3.1-flash-lite` (the free tier's daily limit on
+    2.5-flash had run out).
+  - **Groq**: key check, streamed answer, cited answer and built-in judge with
+    the default `openai/gpt-oss-120b`.
+  - **OpenRouter**: key check, streamed answer, cited answer and built-in judge
+    through the free `nvidia/nemotron-3-super-120b-a12b:free`. The default
+    `openai/gpt-4o-mini` is paid and was not run.
+  - **Local models**: the fastembed embedder `BAAI/bge-small-en-v1.5` and the
+    cross-encoder `Xenova/ms-marco-MiniLM-L-6-v2`, also in the Docker Compose
+    stack, where a chat with reranking on cited the right page.
+  - **Refusing a made-up key** as an auth error, without echoing it: OpenAI,
+    Anthropic, Gemini, Groq, OpenRouter, Together AI and Mistral.
+- **Not yet verified against the real service** (no key was available):
+  OpenAI, Anthropic and Mistral chat, embeddings and judging; Together AI
+  chat, embeddings (`BAAI/bge-base-en-v1.5`) and reranking
+  (`Salesforce/Llama-Rank-V1`); self-hosted servers.
+- **NVIDIA NIM's defaults are known to be retired.** NVIDIA answers 410 Gone
+  for the default chat model `meta/llama-3.1-70b-instruct` and embedding model
+  `nvidia/nv-embedqa-e5-v5` (end of life August 2026) and for the reranking
+  endpoint (May 2026), and its `/v1/models` answers without a key, so the key
+  check accepts any key. They stay as they are until an NVIDIA key can confirm
+  replacements. Meanwhile NVIDIA chat and embeddings need a current model
+  chosen by name, and NVIDIA reranking should be expected to fail.
 
 ## License
 

@@ -19,7 +19,7 @@ _saved_proxies: dict[str, str] = {}
 
 
 def _loopback_only(self, address):
-    if self.family == socket.AF_UNIX or (isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1", "localhost")):
+    if self.family == getattr(socket, "AF_UNIX", None) or (isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1", "localhost")):
         return _real_connect(self, address)
     raise RuntimeError(f"test attempted a network connection to {address!r}")
 

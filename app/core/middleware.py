@@ -1,43 +1,45 @@
 """
 Request-scoped middleware: assigns a unique request ID, measures latency,
-and enforces sliding-window token-bucket rate limits.
+and enforces token-bucket rate limits (see app.core.rate_limit).
 """
 
 import logging
 import time
 import uuid
 
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from app.core import metrics
+from app.core import metrics, rate_limit
 from app.core.client_identity import rate_limit_key
 from app.core.config import settings
-from app.core.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
-# Global rate limiter instance for single-process middleware
-rate_limiter = RateLimiter(
+# Requests per client (see RATE_LIMIT_BACKEND: per process, or shared in Redis).
+rate_limiter = rate_limit.create(
+    "http",
     rate=settings.rate_limit_per_minute / 60.0,
     capacity=settings.rate_limit_burst,
 )
 
-# Login attempts per account (see allow_login_attempt).
-login_rate_limiter = RateLimiter(
+# Login attempts per account (see login_attempt).
+login_rate_limiter = rate_limit.create(
+    "login",
     rate=settings.login_attempts_per_minute / 60.0,
     capacity=settings.login_attempts_burst,
 )
 
 
-def allow_login_attempt(username: str) -> bool:
-    """Count a login attempt for this username; False once its allowance is used up.
+def login_attempt(username: str) -> tuple[bool, float]:
+    """Count a login attempt for this username: (allowed, seconds to wait if not).
 
     Keyed by account, not address, so guessing one user's password is bounded
     however many addresses (or forged X-Forwarded-For values) the guesses come from.
     """
-    return login_rate_limiter.allow(f"login:{username.strip().lower()}")
+    return login_rate_limiter.acquire(f"login:{username.strip().lower()}")
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -98,7 +100,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # The signed-in user, or the client address (X-Forwarded-For only from trusted proxies).
         key = rate_limit_key(request)
 
-        if not rate_limiter.allow(key):
+        if rate_limiter.blocking:  # a Redis round trip: keep it off the event loop
+            allowed, wait = await run_in_threadpool(rate_limiter.acquire, key)
+        else:
+            allowed, wait = rate_limiter.acquire(key)
+        if not allowed:
             logger.warning(
                 "Rate limit exceeded",
                 extra={"client": key, "path": path},
@@ -106,7 +112,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Too many requests. Please slow down."},
-                headers={"Retry-After": "60"},
+                headers={"Retry-After": rate_limit.retry_after_header(wait)},
             )
 
         return await call_next(request)

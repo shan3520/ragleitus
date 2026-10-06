@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.core.middleware import allow_login_attempt
+from app.core.middleware import login_attempt
+from app.core.rate_limit import retry_after_header
 from app.db.database import get_db
 from app.models.user import User
 from app.services import auth_service
@@ -51,11 +52,12 @@ def register(req: RegisterRequest, session: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest, session: Session = Depends(get_db)):
-    if not allow_login_attempt(req.username):
+    allowed, wait = login_attempt(req.username)
+    if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many login attempts for this account. Try again in a minute.",
-            headers={"Retry-After": "60"},
+            headers={"Retry-After": retry_after_header(wait)},
         )
     try:
         user = auth_service.authenticate(session, req.username, req.password)

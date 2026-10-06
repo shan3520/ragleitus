@@ -127,3 +127,24 @@ def test_a_revoked_token_cannot_use_up_the_new_sessions_allowance():
         client.get("/health", headers=old)  # e.g. whoever stole the old token
     assert client.get("/auth/me", headers=new).status_code == 200
     rate_limiter.reset()
+
+
+def test_rate_limit_shared_through_redis_across_app_instances(monkeypatch):
+    """Two API processes (two apps, two limiters) share one Redis-held allowance."""
+    import fakeredis
+
+    from app.core import middleware, rate_limit
+
+    server = fakeredis.FakeServer()
+
+    def limiter():
+        return rate_limit.create("http", rate=1 / 60, capacity=3, backend="redis",
+                                 client=fakeredis.FakeRedis(server=server))
+
+    first, second = TestClient(create_app()), TestClient(create_app())
+    statuses = []
+    for client in (first, second, first, second):
+        monkeypatch.setattr(middleware, "rate_limiter", limiter())
+        statuses.append(client.get("/health").status_code)
+    assert statuses == [200, 200, 200, 429]
+    assert int(second.get("/health").headers["Retry-After"]) > 1

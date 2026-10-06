@@ -352,6 +352,19 @@ proxies listed in `TRUSTED_PROXIES`; otherwise the connecting address is used.
 Login attempts are also limited per account (`LOGIN_ATTEMPTS_PER_MINUTE`,
 default 10), whatever address they claim to come from.
 
+The limits are token buckets. With `RATE_LIMIT_BACKEND=redis` (Docker Compose)
+they are kept in Redis (`REDIS_URL`), so every API process and host shares
+them and the API can be scaled out. The default, `memory`, keeps them in each
+process, which is enough for one process. If Redis can't be reached, each
+process limits on its own until it can again, so requests are never let
+through unlimited. A 429 response says in `Retry-After` when to try again.
+
+To run several API containers with Docker Compose, drop the `api` service's
+fixed host port (the web app reaches them by service name), for example with
+a `docker-compose.override.yml` containing
+`services: {api: {ports: !reset []}}`, then
+`docker compose up --scale api=3`.
+
 `docker compose` gives the web container a fixed address and trusts it, so
 signed-out visitors get their own limits. The web app passes on an
 `X-Forwarded-For` the browser sent itself, so that address can be forged; the
@@ -471,6 +484,9 @@ The spec leaves these open; this is what RAGForge assumes:
   PostgreSQL's statistics over all users' chunks; results never cross users.
 - **The task queue is Celery with Redis.** The `inline` mode, which needs no
   Redis, is for development and single-process installs.
+- **Redis holds the shared rate limits** when there are several API processes.
+  Losing Redis loosens them to one allowance per process for the duration,
+  rather than stopping the API.
 
 What is still not there:
 
@@ -481,9 +497,6 @@ What is still not there:
   embedders are tested against mocked HTTP and a stub OpenAI-compatible server
   (the browser tests use it); they follow each provider's published API but
   have not all been exercised against the real services here.
-- **One API process.** Rate limits live in the API's memory, so with several
-  API processes each has its own. Scale the worker instead (`--scale worker=N`),
-  or put a shared rate limiter in front.
 - **Experiments run one call at a time**, which is gentle on provider rate
   limits but slow for large runs (up to 100 questions × 6 variants, plus the
   evaluator's calls).

@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     # against password guessing that a spoofed X-Forwarded-For cannot get around.
     login_attempts_per_minute: int = 10
     login_attempts_burst: int = 10
+    # Where rate-limit buckets live. "memory": in each API process. "redis":
+    # in REDIS_URL, shared by every API process and host.
+    rate_limit_backend: Literal["memory", "redis"] = "memory"
     # Addresses (IPs or CIDRs) of reverse proxies allowed to report the client
     # address in X-Forwarded-For. Empty: the header is ignored, because any
     # caller can set it.

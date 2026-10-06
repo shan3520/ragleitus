@@ -60,6 +60,15 @@ def test_other_errors_are_not_retried():
         assert provider.calls == 1 and waits == []
 
 
+def test_a_quota_that_will_not_come_back_soon_is_not_retried():
+    # Gemini's free tier, out of its daily requests: RetryInfo asks for ~18 hours.
+    provider = Flaky([ProviderError("429", 429, retry_after=64791.0)])
+    _, waits, call = _run(provider)
+    with pytest.raises(ProviderError) as exc:
+        call()
+    assert exc.value.retry_after == 64791.0 and provider.calls == 1 and waits == []
+
+
 def test_it_gives_up_after_the_last_attempt():
     provider = Flaky([ProviderError("429", 429)] * 10)
     _, waits, call = _run(provider)
@@ -120,6 +129,11 @@ def test_rerank_calls_are_retried_on_rate_limits_only():
     assert reranker.provider == "together" and reranker.calls == ["seen"]  # looks like the inner one
 
     inner = Inner([ProviderError("bad", 400)])
+    with pytest.raises(ProviderError):
+        RetryingReranker(inner, sleep=waits.append).rerank("q", ["a"])
+    assert inner.asked == 1
+
+    inner = Inner([ProviderError("429", 429, retry_after=86400.0)])
     with pytest.raises(ProviderError):
         RetryingReranker(inner, sleep=waits.append).rerank("q", ["a"])
     assert inner.asked == 1

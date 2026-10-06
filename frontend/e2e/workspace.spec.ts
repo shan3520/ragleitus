@@ -136,10 +136,12 @@ test("from sign-up to a cited, evaluated answer", async ({ page }) => {
     await page.locator("#variant-1-model").fill("stub-model");
     await page.locator("#variant-1-prompt").selectOption({ label: "Brief v1" });
     await page.locator("#variant-1-retrieval").selectOption("keyword");
+    await page.getByLabel("Answers at once").selectOption("2");
     await page.getByRole("button", { name: "Create and run" }).click();
 
     await expect(page).toHaveURL(/\/experiments\/\d+$/);
     await expect(page.getByText("Completed", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/· 2 at once/)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Judge scores" })).toBeVisible();
     await expect(page.locator(".recharts-bar-rectangle").first()).toBeVisible();
     await expect(page.getByTestId("variant-answer")).toHaveCount(2);

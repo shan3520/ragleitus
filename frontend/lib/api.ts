@@ -181,6 +181,8 @@ export interface Experiment {
   evaluator: string;
   judge_provider: string | null;
   judge_model: string | null;
+  /** Answers worked on at once. */
+  concurrency: number;
   progress: { done: number; total: number };
   cases?: ExperimentCase[];
 }
@@ -554,6 +556,8 @@ export const api = {
     variants: ExperimentVariantInput[];
     evaluate?: boolean;
     evaluator?: string;
+    /** Answers worked on at once (1 to 16); the server's default if left out. */
+    concurrency?: number;
     run?: boolean;
   }) => request<Experiment>("/api/experiments", { method: "POST", body: json(body) }),
   runExperiment: (id: number) => request<Experiment>(`/api/experiments/${id}/run`, { method: "POST" }),

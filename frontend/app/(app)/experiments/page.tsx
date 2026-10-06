@@ -18,7 +18,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type Provider, type PromptSummary, type RetrievalStrategy } from "@/lib/api";
 import { DEFAULT_EVALUATOR, useEvaluators } from "@/lib/evaluators";
-import { MAX_VARIANTS, parseCases, progressPercent } from "@/lib/experiments";
+import { CONCURRENCY_OPTIONS, MAX_VARIANTS, parseCases, progressPercent } from "@/lib/experiments";
 import { useApi } from "@/lib/use-api";
 import { formatDate } from "@/lib/utils";
 
@@ -138,6 +138,7 @@ function NewExperiment({ providers, prompts }: { providers: Provider[]; prompts:
   const [evaluate, setEvaluate] = useState(true);
   const evaluators = useEvaluators();
   const [evaluator, setEvaluator] = useState(DEFAULT_EVALUATOR);
+  const [concurrency, setConcurrency] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -162,6 +163,7 @@ function NewExperiment({ providers, prompts }: { providers: Provider[]; prompts:
         cases,
         evaluate,
         evaluator,
+        concurrency: concurrency ? Number(concurrency) : undefined,
         run: true,
         variants: rows.map((r) => ({
           label: r.label || undefined,
@@ -249,6 +251,25 @@ function NewExperiment({ providers, prompts }: { providers: Provider[]; prompts:
             </option>
           ))}
         </Select>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Label htmlFor="experiment-concurrency">Answers at once</Label>
+        <Select
+          id="experiment-concurrency"
+          className="h-8 w-auto"
+          value={concurrency}
+          onChange={(e) => setConcurrency(e.target.value)}
+        >
+          <option value="">Server default</option>
+          {CONCURRENCY_OPTIONS.map((n) => (
+            <option key={n} value={String(n)}>
+              {n}
+            </option>
+          ))}
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          More is faster; calls that hit a provider&apos;s rate limit wait and are tried again.
+        </p>
       </div>
       {error && <Alert variant="destructive">{error}</Alert>}
       <div>

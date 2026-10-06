@@ -40,6 +40,10 @@ class ExperimentCreate(BaseModel):
     judge_provider: str | None = Field(default=None, max_length=100, description="Defaults to each variant's own provider")
     judge_model: str | None = Field(default=None, max_length=255)
     evaluator: str = Field(default="builtin", description="builtin, ragas or deepeval (see GET /api/evaluators)")
+    concurrency: int | None = Field(
+        default=None, ge=1, le=experiment_service.MAX_CONCURRENCY,
+        description="Answers worked on at once; EXPERIMENT_CONCURRENCY if left out",
+    )
     run: bool = Field(default=False, description="Start running it right away")
 
 
@@ -73,6 +77,7 @@ def create_experiment(
             session, user.id, payload.name,
             [c.model_dump() for c in payload.cases], [v.model_dump() for v in payload.variants],
             payload.document_ids, payload.evaluate, payload.judge_provider, payload.judge_model, payload.evaluator,
+            payload.concurrency,
         )
         if payload.run:
             experiment_service.start_run(session, user.id, experiment.id)

@@ -42,6 +42,14 @@ Base.metadata.create_all(bind=engine)
 
 
 @pytest.fixture(autouse=True)
+def _no_retry_waits(monkeypatch):
+    """Provider calls retried after a 429/503 (experiments) retry at once in tests."""
+    from app.services.llm import retry
+
+    monkeypatch.setattr(retry, "MAX_WAIT_SECONDS", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_app_state():
     from app.core.middleware import login_rate_limiter, rate_limiter
     from app.main import app

@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 MAX_CASES = 100
 MAX_VARIANTS = 6
 MAX_TOP_K = 20
+MAX_CONCURRENCY = 16
 
 # Metric -> whether higher is better.
 JUDGE_METRICS = ("faithfulness", "answer_relevancy", "context_precision", "context_recall")
@@ -147,6 +148,7 @@ def create_experiment(
     judge_provider: str | None = None,
     judge_model: str | None = None,
     evaluator: str | None = None,
+    concurrency: int | None = None,
 ) -> Experiment:
     name = (name or "").strip()
     if not name:
@@ -169,6 +171,10 @@ def create_experiment(
         judge_spec = _check_provider(session, user_id, judge_provider, "Judge")
         if not (judge_model or "").strip() and not judge_spec.default_model:
             raise ExperimentError(f"Judge: choose a model for {judge_spec.label}.")
+    if concurrency is None:
+        concurrency = min(max(settings.experiment_concurrency, 1), MAX_CONCURRENCY)
+    if not 1 <= concurrency <= MAX_CONCURRENCY:
+        raise ExperimentError(f"Concurrency must be between 1 and {MAX_CONCURRENCY}.")
     try:
         evaluator = evaluators.get(evaluator).NAME
     except evaluators.EvaluationError as exc:
@@ -183,6 +189,7 @@ def create_experiment(
         evaluate=bool(evaluate),
         judge_provider=judge_provider or None,
         judge_model=(judge_model or "").strip() or None,
+        concurrency=concurrency,
         created_at=_now(),
         variants=built,
     )
@@ -259,6 +266,7 @@ def experiment_dict(experiment: Experiment, done: int, with_cases: bool = False)
         "evaluator": experiment.evaluator,
         "judge_provider": experiment.judge_provider,
         "judge_model": experiment.judge_model,
+        "concurrency": experiment.concurrency,
         "progress": {"done": done, "total": total},
     }
     if with_cases:
@@ -310,13 +318,16 @@ def start_run(session: Session, user_id: int, experiment_id: int) -> Experiment:
             evaluators.get(experiment.evaluator)
         except evaluators.EvaluationError as exc:
             raise ExperimentError(exc.message) from None
-    session.query(ExperimentResult).filter(ExperimentResult.experiment_id == experiment.id).delete(synchronize_session=False)
     experiment.status = "queued"
     experiment.error = None
     experiment.run_token = None
     # When the run was requested; the runner sets it again when it starts.
     experiment.started_at = _now()
     experiment.finished_at = None
+    # Update the experiment first: that locks its row, so a running run can't
+    # store one more result after the delete below (see experiment_runner).
+    session.flush()
+    session.query(ExperimentResult).filter(ExperimentResult.experiment_id == experiment.id).delete(synchronize_session=False)
     session.flush()
     return experiment
 

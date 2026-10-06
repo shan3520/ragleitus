@@ -160,6 +160,7 @@ export default function ExperimentPage() {
             description={[
               `Created ${formatDate(experiment.created_at)}`,
               experiment.evaluate ? `scored with ${evaluatorLabel(experiment.evaluator)}` : "not scored",
+              `${experiment.concurrency} at once`,
             ].join(" · ")}
             actions={
               <div className="flex flex-wrap items-center gap-2">

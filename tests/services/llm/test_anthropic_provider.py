@@ -112,6 +112,18 @@ def test_api_error_becomes_provider_error():
     assert "sk-ant-secret" not in exc.value.message
 
 
+def test_rate_limit_carries_retry_after():
+    def handler(request):
+        return httpx2.Response(
+            429, headers={"retry-after": "9"},
+            json={"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}},
+        )
+
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(complete(_provider(handler), [ChatMessage("user", "Q")], "claude-haiku-4-5", 100))
+    assert exc.value.status_code == 429 and exc.value.retry_after == 9.0 and exc.value.is_retryable
+
+
 def test_list_models():
     def handler(request):
         assert request.url.path == "/v1/models"

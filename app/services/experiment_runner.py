@@ -20,14 +20,22 @@ The run claims the experiment with a token, like indexing does: if the
 experiment is re-run or deleted meanwhile, this run stops at its next
 result. It runs synchronously (in a Celery worker or a background thread);
 the provider calls, which are async, run on a private event loop.
+
+Up to `experiment.concurrency` answers are worked on at once, each in its
+own thread with its own database session and pipeline. Results are stored
+by question and variant, so the order they finish in does not matter.
+Provider calls that hit a rate limit or a passing error wait and are tried
+again (see llm.retry), which is what makes running several at once safe.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Callable, TypedDict
 
@@ -42,6 +50,7 @@ from app.services import telemetry
 from app.services.chat_service import build_prompt, extract_citations, prompt_template
 from app.services.llm import ProviderError, ProviderFactory, Usage, complete, create_provider, get_spec
 from app.services.llm.pricing import estimate_cost_usd
+from app.services.llm.retry import with_retries
 from app.services.provider_key import MissingProviderKeyError, create_user_provider
 from app.services import embedding_service, rag_evaluation
 from app.services.evaluators import EvaluationError, EvaluationInput
@@ -199,8 +208,12 @@ def build_graph(
         return {"scores": scores}
 
     def record_node(state: CaseState) -> dict:
-        # Write only while this run still owns the experiment.
-        owner = session.query(Experiment.run_token).filter(Experiment.id == experiment.id).scalar()
+        # Write only while this run still owns the experiment. The row lock
+        # (PostgreSQL) keeps a re-run from taking over between this check and
+        # the commit: start_run takes the same lock before it deletes results.
+        owner = (
+            session.query(Experiment.run_token).filter(Experiment.id == experiment.id).with_for_update().scalar()
+        )
         if owner != token:
             session.rollback()
             raise _Superseded()
@@ -279,6 +292,82 @@ def _claim(session: Session, experiment_id: int, token: str) -> Experiment | Non
     return session.get(Experiment, experiment_id) if claimed else None
 
 
+def _invoke(graph, experiment: Experiment, case_index: int, case: dict, variant: ExperimentVariant) -> None:
+    """Answer one question with one variant (its result is stored by the graph's record step)."""
+    with tracing.span(
+        "experiment.case", experiment__id=experiment.id, experiment__case=case_index,
+        experiment__variant=variant.label, gen_ai__system=variant.provider,
+        gen_ai__request__model=variant.model, retrieval__strategy=variant.retrieval,
+        user__id=str(experiment.user_id),
+    ):
+        graph.invoke(
+            {
+                "case_index": case_index,
+                "question": case["question"],
+                "reference": case.get("reference_answer"),
+                "variant_id": variant.id,
+            }
+        )
+
+
+def _run_parallel(
+    experiment_id: int,
+    work: list[tuple[int, dict, int]],
+    workers: int,
+    token: str,
+    session_factory: Callable[[], Session],
+    factory: ProviderFactory,
+    retriever: Callable[..., list[RetrievedChunk]],
+) -> None:
+    """Work through (case index, case, variant id) items on `workers` threads.
+
+    Each thread has its own session, experiment and graph: sessions and the
+    objects loaded through them are not shared between threads. The first
+    failure (or a newer run taking over) stops the items not yet started,
+    and is raised once the running ones have finished.
+    """
+    local = threading.local()
+    sessions: list[Session] = []
+    lock = threading.Lock()
+    stop = threading.Event()
+
+    def context():
+        if not hasattr(local, "graph"):
+            session = session_factory()
+            with lock:
+                sessions.append(session)
+            experiment = session.get(Experiment, experiment_id)
+            if experiment is None or experiment.run_token != token:
+                raise _Superseded()
+            local.experiment = experiment
+            local.variants = {v.id: v for v in experiment.variants}
+            local.graph = build_graph(session, experiment, token, factory, retriever)
+        return local
+
+    def task(case_index: int, case: dict, variant_id: int) -> None:
+        if stop.is_set():
+            return
+        try:
+            ctx = context()
+            _invoke(ctx.graph, ctx.experiment, case_index, case, ctx.variants[variant_id])
+        except BaseException:
+            stop.set()
+            raise
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"experiment-{experiment_id}") as pool:
+            futures = [pool.submit(task, *item) for item in work]
+        errors = [future.exception() for future in futures if future.exception() is not None]
+    finally:
+        for session in sessions:
+            session.close()
+    for error in errors:
+        if isinstance(error, _Superseded):
+            raise error
+    if errors:
+        raise errors[0]
+
+
 def run_experiment(
     experiment_id: int,
     session_factory: Callable[[], Session] = SessionLocal,
@@ -289,30 +378,27 @@ def run_experiment(
 
     Never raises: an unexpected failure marks the experiment failed.
     """
+    from app.services.experiment_service import MAX_CONCURRENCY
+
     token = str(uuid.uuid4())
+    factory = with_retries(factory)
     session = session_factory()
     try:
         experiment = _claim(session, experiment_id, token)
         if experiment is None:
             return  # not queued: a duplicate job, or deleted
         try:
-            graph = build_graph(session, experiment, token, factory, retriever)
-            for case_index, case in enumerate(experiment.cases or []):
-                for variant in experiment.variants:
-                    with tracing.span(
-                        "experiment.case", experiment__id=experiment.id, experiment__case=case_index,
-                        experiment__variant=variant.label, gen_ai__system=variant.provider,
-                        gen_ai__request__model=variant.model, retrieval__strategy=variant.retrieval,
-                        user__id=str(experiment.user_id),
-                    ):
-                        graph.invoke(
-                            {
-                                "case_index": case_index,
-                                "question": case["question"],
-                                "reference": case.get("reference_answer"),
-                                "variant_id": variant.id,
-                            }
-                        )
+            variants = list(experiment.variants)
+            work = [(i, case, v.id) for i, case in enumerate(experiment.cases or []) for v in variants]
+            workers = max(1, min(experiment.concurrency or 1, MAX_CONCURRENCY, len(work)))
+            if workers == 1:
+                graph = build_graph(session, experiment, token, factory, retriever)
+                by_id = {v.id: v for v in variants}
+                for case_index, case, variant_id in work:
+                    _invoke(graph, experiment, case_index, case, by_id[variant_id])
+            else:
+                session.commit()  # hold no transaction while the threads write
+                _run_parallel(experiment_id, work, workers, token, session_factory, factory, retriever)
             status, error = "completed", None
         except _Superseded:
             logger.info("Experiment run superseded", extra={"experiment_id": experiment_id})

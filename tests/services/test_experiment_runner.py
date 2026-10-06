@@ -1,5 +1,7 @@
+import asyncio
 import csv
 import io
+import threading
 from datetime import timedelta
 from functools import partial
 
@@ -14,6 +16,7 @@ from app.models.experiment import Experiment, ExperimentResult
 from app.models.telemetry_event import TelemetryEvent
 from app.services import experiment_runner, experiment_service, ingestion, prompt_service
 from app.services.embeddings import FakeEmbedder
+from app.services.llm import ProviderError
 from app.services.experiment_service import ExperimentBusyError, ExperimentError
 from app.services.provider_key import encrypt_key, save_provider_key
 from app.services.retrieval import retrieve
@@ -32,6 +35,22 @@ def env(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'experiments.db'}")
     event.listen(engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
     Base.metadata.create_all(engine)
+    yield from _env(engine)
+
+
+@pytest.fixture
+def pg_env():
+    """The same, on PostgreSQL (TEST_POSTGRES_URL), where runs really write concurrently."""
+    from tests.postgres import POSTGRES_URL, fresh_postgres
+
+    if not POSTGRES_URL:
+        pytest.skip("TEST_POSTGRES_URL is not set")
+    engine = fresh_postgres()
+    yield from _env(engine)
+    engine.dispose()
+
+
+def _env(engine):
     factory = sessionmaker(bind=engine)
     embedder = FakeEmbedder()
     store = VectorStore(QdrantClient(location=":memory:"), embedder.model_name, embedder.dimension)
@@ -195,7 +214,7 @@ def test_without_evaluation_only_the_lexical_score_is_kept(env):
     experiment = _create(session, user, evaluate=False)
     provider = run(experiment.id)
     assert not any("impartial evaluator" in c["messages"][0].content for c in provider.calls)
-    first = session.query(ExperimentResult).order_by(ExperimentResult.id).first()
+    first = session.query(ExperimentResult).order_by(ExperimentResult.case_index, ExperimentResult.variant_id).first()
     assert first.faithfulness is None and first.rouge_l is not None
 
 
@@ -262,6 +281,8 @@ def test_variants_and_questions_are_checked(env):
         ({"variants": [{**base, "prompt_version_id": foreign.versions[0].id}]}, "prompt version not found"),
         ({"document_ids": [987654]}, "documents were not found"),
         ({"judge_provider": "anthropic"}, "Judge: no API key"),
+        ({"concurrency": 0}, "Concurrency must be between 1 and 16"),
+        ({"concurrency": 17}, "Concurrency must be between 1 and 16"),
     ]:
         with pytest.raises(ExperimentError, match=message):
             create(**kwargs)
@@ -271,6 +292,7 @@ def test_variants_and_questions_are_checked(env):
         ("Variant A", "mistral-small-latest", "Built-in prompt"), ("Variant B", "gpt-4o", "Built-in prompt"),
     ]
     assert experiment.status == "draft"
+    assert experiment.concurrency == settings.experiment_concurrency  # the default
 
 
 def test_a_running_experiment_cannot_be_started_twice_unless_its_run_was_lost(env):
@@ -360,3 +382,91 @@ def test_an_experiment_can_be_scored_by_another_evaluator(env):
     assert experiment_service.describe(session, session.get(Experiment, experiment.id))["evaluator"] == "ragas"
     with pytest.raises(ExperimentError, match="Unknown evaluator"):
         experiment_service.create_experiment(session, user.id, "x", CASES, [{"provider": "openai"}], evaluator="magic")
+
+
+class _CountingProvider(ScriptedProvider):
+    """Records how many calls were in flight at once (each takes a moment)."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._lock = threading.Lock()
+        self.in_flight = 0
+        self.most_in_flight = 0
+
+    async def stream(self, messages, model, max_tokens):
+        with self._lock:
+            self.in_flight += 1
+            self.most_in_flight = max(self.most_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.05)
+            async for event in super().stream(messages, model, max_tokens):
+                yield event
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+
+
+@pytest.mark.parametrize("database", ["env", "pg_env"])
+@pytest.mark.parametrize("concurrency", [1, 4])
+def test_answers_are_worked_on_concurrently_and_each_stored_once(request, database, concurrency):
+    session, user, run = request.getfixturevalue(database)
+    cases = [{"question": f"What does error E-4711 mean? ({i})"} for i in range(5)]
+    experiment = _create(session, user, cases=cases, concurrency=concurrency)
+
+    provider = run(experiment.id, provider=_CountingProvider())
+
+    assert session.get(Experiment, experiment.id).status == "completed"
+    stored = sorted((r.case_index, r.variant_id) for r in session.query(ExperimentResult))
+    expected = sorted((i, v.id) for i in range(5) for v in session.get(Experiment, experiment.id).variants)
+    assert stored == expected  # every question x variant, once
+    assert all(r.error is None and r.answer for r in session.query(ExperimentResult))
+    assert provider.most_in_flight == 1 if concurrency == 1 else provider.most_in_flight > 1
+    assert session.query(TelemetryEvent).count() == 20  # 10 answers + 10 judgements
+
+
+def test_rate_limited_calls_are_retried(env):
+    session, user, run = env
+    experiment = _create(session, user, concurrency=1)  # one at a time: every other call is limited
+
+    class RateLimited(ScriptedProvider):
+        async def stream(self, messages, model, max_tokens):
+            if len(self.calls) % 2 == 0:
+                self.calls.append({"messages": messages, "model": model, "max_tokens": max_tokens})
+                raise ProviderError("openai returned HTTP 429: slow down", 429, retry_after=0.01)
+            async for event in super().stream(messages, model, max_tokens):
+                yield event
+
+    provider = run(experiment.id, provider=RateLimited())
+
+    results = session.query(ExperimentResult).all()
+    assert len(results) == 4 and all(r.error is None and r.faithfulness is not None for r in results)
+    assert len(provider.calls) == 16  # 4 answers and 4 judgements, each rate limited once first
+    assert session.query(TelemetryEvent).filter(TelemetryEvent.status == "error").count() == 0
+
+
+@pytest.mark.parametrize("database", ["env", "pg_env"])
+def test_a_run_replaced_while_running_concurrently_stops_the_rest(request, database):
+    session, user, run = request.getfixturevalue(database)
+    cases = [{"question": f"Question {i}"} for i in range(12)]
+    experiment = _create(session, user, cases=cases, concurrency=3, evaluate=False)
+    other_session = sessionmaker(bind=session.get_bind())()
+    calls = []
+    lock = threading.Lock()
+
+    def retriever(*args, **kwargs):
+        with lock:
+            calls.append(1)
+            if len(calls) == 3:
+                other_session.query(Experiment).filter(Experiment.id == experiment.id).update(
+                    {Experiment.run_token: "newer"}
+                )
+                other_session.commit()
+        return []
+
+    run(experiment.id, retriever=retriever)
+    other_session.close()
+
+    # Results finished before the takeover may be kept; nothing after it, and far from all 24.
+    assert session.query(ExperimentResult).count() <= 2
+    assert len(calls) < 24
+    assert session.get(Experiment, experiment.id).status == "running"  # the newer run's

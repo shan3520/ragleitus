@@ -249,6 +249,12 @@ flowchart LR
   - Each result stores the answer, citations, the passages used, latency,
     tokens and cost, the LLM judge's scores (judged by each variant's own model
     unless a judge is chosen) and ROUGE-L against the reference answer.
+  - Several answers are worked on at once: `concurrency` per experiment (1 to
+    16, "Answers at once" in the form), `EXPERIMENT_CONCURRENCY` (default 4)
+    when it isn't given. Each runs in its own thread with its own database
+    session. A call that hits a provider's rate limit or a passing error (429,
+    503, 529, ...) waits as the provider asks (`Retry-After`) or backs off, and
+    is tried up to three more times; chat does not retry.
   - A failed call is recorded with its error and the run goes on. Running again
     replaces the results; a run lost with its worker can be restarted once it
     is older than `INDEX_STALE_MINUTES`.
@@ -484,6 +490,9 @@ The spec leaves these open; this is what RAGForge assumes:
   PostgreSQL's statistics over all users' chunks; results never cross users.
 - **The task queue is Celery with Redis.** The `inline` mode, which needs no
   Redis, is for development and single-process installs.
+- **Experiments share the user's provider limits.** Running several answers at
+  once is faster, but a provider with a low rate limit answers with 429s that
+  the run waits out; lower an experiment's concurrency for such a provider.
 - **Redis holds the shared rate limits** when there are several API processes.
   Losing Redis loosens them to one allowance per process for the duration,
   rather than stopping the API.
@@ -497,9 +506,6 @@ What is still not there:
   embedders are tested against mocked HTTP and a stub OpenAI-compatible server
   (the browser tests use it); they follow each provider's published API but
   have not all been exercised against the real services here.
-- **Experiments run one call at a time**, which is gentle on provider rate
-  limits but slow for large runs (up to 100 questions × 6 variants, plus the
-  evaluator's calls).
 - **Ragas and DeepEval are heavy.** They make several calls per answer and
   roughly double the size of the API image; installs without them simply don't
   offer them.

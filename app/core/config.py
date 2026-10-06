@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 6
     chat_history_turns: int = 6
     llm_max_output_tokens: int = 16000
+    # Answers an experiment works on at once, unless it says otherwise
+    # (1 to MAX_CONCURRENCY in experiment_service). Calls that hit a provider's
+    # rate limit wait and are tried again.
+    experiment_concurrency: int = 4
 
     # HTTP
     rate_limit_per_minute: int = 60

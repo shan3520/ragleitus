@@ -8,6 +8,7 @@ import anthropic
 
 from app.core.config import settings
 from app.services.llm.base import ChatMessage, ProviderError, StreamEvent, Usage, split_system
+from app.services.llm.http import retry_after_seconds
 
 # Models that accept the server-side refusal fallback. When a safety
 # classifier declines a request on one of these, the API re-runs it on a
@@ -17,6 +18,14 @@ _FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "cla
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 _FINISH_REASONS = {"end_turn": "stop", "max_tokens": "length", "stop_sequence": "stop", "refusal": "refusal"}
+
+
+def _status_error(exc: "anthropic.APIStatusError") -> ProviderError:
+    return ProviderError(
+        f"anthropic returned HTTP {exc.status_code}: {exc.message}",
+        status_code=exc.status_code,
+        retry_after=retry_after_seconds(exc.response.headers if exc.response is not None else None),
+    )
 
 
 class AnthropicProvider:
@@ -49,7 +58,7 @@ class AnthropicProvider:
                         yield StreamEvent(kind="delta", text=text)
                 final = await stream.get_final_message()
         except anthropic.APIStatusError as exc:
-            raise ProviderError(f"anthropic returned HTTP {exc.status_code}: {exc.message}", status_code=exc.status_code) from None
+            raise _status_error(exc) from None
         except anthropic.APIConnectionError as exc:
             raise ProviderError(f"Could not reach anthropic ({type(exc).__name__})") from None
 
@@ -64,7 +73,7 @@ class AnthropicProvider:
         try:
             page = await self._client.models.list(limit=100)
         except anthropic.APIStatusError as exc:
-            raise ProviderError(f"anthropic returned HTTP {exc.status_code}: {exc.message}", status_code=exc.status_code) from None
+            raise _status_error(exc) from None
         except anthropic.APIConnectionError as exc:
             raise ProviderError(f"Could not reach anthropic ({type(exc).__name__})") from None
         return [model.id for model in page.data]

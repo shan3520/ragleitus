@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import AsyncIterator, Mapping
 
 import httpx
 
@@ -30,6 +32,25 @@ def _error_text(response: httpx.Response) -> str:
     return str(body)[:300]
 
 
+def retry_after_seconds(headers: Mapping[str, str] | None) -> float | None:
+    """The wait a Retry-After header asks for (seconds or an HTTP date), if any."""
+    value = (headers or {}).get("retry-after") or (headers or {}).get("Retry-After")
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
 async def raise_for_status(response: httpx.Response, provider: str, *, include_body: bool = True) -> None:
     """Raise ProviderError for an error response.
 
@@ -38,12 +59,16 @@ async def raise_for_status(response: httpx.Response, provider: str, *, include_b
     """
     if response.status_code < 400:
         return
+    retry_after = retry_after_seconds(response.headers)
     if not include_body:
-        raise ProviderError(f"{provider} returned HTTP {response.status_code}", status_code=response.status_code)
+        raise ProviderError(
+            f"{provider} returned HTTP {response.status_code}", status_code=response.status_code, retry_after=retry_after
+        )
     await response.aread()
     raise ProviderError(
         f"{provider} returned HTTP {response.status_code}: {_error_text(response)}",
         status_code=response.status_code,
+        retry_after=retry_after,
     )
 
 

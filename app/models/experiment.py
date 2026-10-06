@@ -34,6 +34,8 @@ class Experiment(Base):
     evaluator = Column(String(20), nullable=False, default="builtin", server_default="builtin")
     judge_provider = Column(String(100), nullable=True)
     judge_model = Column(String(255), nullable=True)
+    # How many answers (question x variant) are worked on at once.
+    concurrency = Column(Integer, nullable=False, default=1, server_default="1")
     # Identifies the run that owns the experiment; a newer run takes over.
     run_token = Column(String(36), nullable=True)
     error = Column(Text, nullable=True)

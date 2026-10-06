@@ -58,3 +58,22 @@ def test_transport_error_does_not_include_the_url():
     error = transport_error("openai", httpx.ConnectError("failed to connect to https://api.example.test", request=request))
     assert error.message == "Could not reach openai (ConnectError)"
     assert "example" not in error.message and error.status_code is None
+
+
+def test_retry_after_is_read_from_seconds_or_a_date():
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    from app.services.llm.http import retry_after_seconds
+
+    assert retry_after_seconds({"retry-after": "7"}) == 7.0
+    assert retry_after_seconds(httpx.Headers({"Retry-After": "1.5"})) == 1.5
+    soon = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
+    assert 25 <= retry_after_seconds({"retry-after": soon}) <= 30
+    assert retry_after_seconds({"retry-after": "soon"}) is None
+    assert retry_after_seconds({}) is None and retry_after_seconds(None) is None
+    assert retry_after_seconds({"retry-after": "-3"}) == 0.0
+
+    with pytest.raises(ProviderError) as exc:
+        asyncio.run(raise_for_status(httpx.Response(429, headers={"Retry-After": "12"}, text="slow"), "openai"))
+    assert exc.value.retry_after == 12.0 and exc.value.is_retryable

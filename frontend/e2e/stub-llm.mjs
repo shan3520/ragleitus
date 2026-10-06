@@ -8,11 +8,13 @@
 // Accepts only the key "stub-key".
 //
 //   node e2e/stub-llm.mjs            # listens on :9999 (STUB_LLM_PORT to change)
+//   STUB_LLM_LATENCY_MS=500 node e2e/stub-llm.mjs   # each chat answer takes that long
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
 const PORT = Number(process.env.STUB_LLM_PORT ?? 9999);
 const KEY = "stub-key";
+const LATENCY_MS = Number(process.env.STUB_LLM_LATENCY_MS ?? 0);
 
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -90,6 +92,7 @@ const server = createServer(async (req, res) => {
     });
   }
   if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) return json(res, 404, { error: { message: "Not found" } });
+  if (LATENCY_MS > 0) await new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
 
   const { messages } = await readJson(req);
   const answer = answerFor(messages);

@@ -27,6 +27,9 @@ export const METRICS: MetricSpec[] = [
 
 export const MAX_VARIANTS = 6;
 
+/** Choices for how many answers an experiment works on at once (the API allows 1 to 16). */
+export const CONCURRENCY_OPTIONS = [1, 2, 4, 8, 16] as const;
+
 /**
  * Questions from pasted text: one per line, optionally followed by " | " and a
  * reference answer. A JSON array of {question, reference_answer} (or of

@@ -10,8 +10,11 @@ WORKDIR /srv/ragforge
 # Install dependencies first so code changes don't reinstall them. The code
 # itself runs from this directory (uvicorn and alembic put it on sys.path).
 COPY pyproject.toml README.md ./
-# The optional evaluators (Ragas, DeepEval) are included.
-RUN mkdir app && pip install ".[ragas,deepeval]" && rmdir app
+# Optional extras to include: by default the evaluators Ragas and DeepEval.
+# Build with --build-arg EXTRAS= for a slimmer image without them (the app
+# then offers only its built-in judge).
+ARG EXTRAS="ragas,deepeval"
+RUN mkdir app && pip install ".${EXTRAS:+[$EXTRAS]}" && rmdir app
 
 COPY app ./app
 COPY alembic.ini ./

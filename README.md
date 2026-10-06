@@ -39,6 +39,11 @@ This starts PostgreSQL 16, Qdrant, Redis, the API, an indexing worker and the
 web app. Migrations run automatically. Open <http://localhost:3000>, create an account, add a provider
 key and upload a document. The interactive API is at <http://localhost:8000/docs>.
 
+The API image includes the optional evaluators Ragas and DeepEval (1.6 GB).
+For a slimmer image without them (870 MB), build with
+`EVALUATOR_EXTRAS= docker compose up --build`, or set `EVALUATOR_EXTRAS=` in
+`.env`; the app then offers only its built-in judge.
+
 To add monitoring, start the `observability` profile:
 `docker compose --profile observability up --build`. Grafana (with the RAGForge
 dashboard) is at <http://localhost:3001>, Prometheus at <http://localhost:9090>
@@ -300,8 +305,10 @@ flowchart LR
     off, and DeepEval runs in plain LLM mode (nothing goes to Confident AI).
     They make several calls per answer, so they cost more than `builtin`.
   - They are optional extras (`pip install ".[ragas]"`, `".[deepeval]"`); the
-    Docker image and `.[dev]` include both. `GET /api/evaluators` says which
-    are installed, and the web app only offers those.
+    Docker image and `.[dev]` include both. Building the image with
+    `EVALUATOR_EXTRAS=` leaves them out and roughly halves its size (see
+    [Quick start](#quick-start-with-docker-compose)). `GET /api/evaluators`
+    says which are installed, and the web app only offers those.
   - A metric an evaluator could not score is left empty (Ragas has no
     faithfulness for an answer that makes no claims). DeepEval 4's
     hallucination score measures agreement, so it is stored inverted.
@@ -500,7 +507,8 @@ The spec leaves these open; this is what RAGForge assumes:
   belongs to one user; there are no teams or shared workspaces.
 - **Evaluation runs on the user's own models.** The built-in judge, Ragas and
   DeepEval all use a provider key the user stored, so evaluating costs the user,
-  like chatting does.
+  like chatting does. Ragas and DeepEval make several calls per answer where
+  the built-in judge makes one.
 - **Each document has one embedding model**, the one the user had chosen when it
   was indexed. Changing the choice affects new documents until the old ones are
   re-indexed.
@@ -522,9 +530,6 @@ What is still not there:
   embedders are tested against mocked HTTP and a stub OpenAI-compatible server
   (the browser tests use it); they follow each provider's published API but
   have not all been exercised against the real services here.
-- **Ragas and DeepEval are heavy.** They make several calls per answer and
-  roughly double the size of the API image; installs without them simply don't
-  offer them.
 - **The monitoring stack is a starting point.** Grafana ships with a dashboard
   but no alert rules, and Jaeger keeps traces in memory.
 

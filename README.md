@@ -149,7 +149,7 @@ flowchart LR
 
     subgraph Chat turn
       q[Question] --> dense[Dense search] & keyword[Keyword search<br/>PostgreSQL full-text]
-      dense & keyword --> rrf[Reciprocal rank fusion] --> prompt[Numbered passages] --> gen[Stream answer] --> cite[Resolve n citations]
+      dense & keyword --> rrf[Reciprocal rank fusion] --> rerank[Rerank<br/>optional] --> prompt[Numbered passages] --> gen[Stream answer] --> cite[Resolve n citations]
       gen --> tel[Telemetry]
     end
 
@@ -334,7 +334,7 @@ flowchart LR
   - LLM calls, latency, time to first token, tokens and cost by provider, model
     and operation;
   - index runs by outcome and duration;
-  - retrieval latency by strategy;
+  - retrieval latency by strategy, and reranking duration;
   - documents waiting to be indexed.
 
   They carry no user ids or text, and the model label is bounded (self-hosted
@@ -454,7 +454,7 @@ counted as `unpriced_requests` in the telemetry summary.
 | `POST/GET /api/experiments`, `GET/DELETE /api/experiments/{id}`, `POST /api/experiments/{id}/run`, `GET /api/experiments/{id}/compare`, `GET /api/experiments/{id}/export?format=csv\|json`, `GET /api/experiments/report` | Experiments |
 | `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`, `POST /api/conversations/{id}/messages` | Chat |
 | `GET /api/telemetry/summary`, `GET /api/telemetry/events`, `GET /api/export/metrics?format=json\|csv` | Telemetry and export |
-| `POST /api/evaluations`, `GET /api/evaluations`, `GET /api/evaluators` | Evaluation |
+| `POST /api/evaluations`, `GET /api/evaluations`, `GET /api/evaluations/summary`, `GET /api/evaluators` | Evaluation |
 | `GET /health`, `GET /api/health/subsystems` | Health (no login needed) |
 
 Analytics endpoints predate the chat flow and are scoped to the logged-in user:

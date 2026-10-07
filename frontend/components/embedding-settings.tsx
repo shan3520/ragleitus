@@ -62,8 +62,8 @@ function EmbeddingForm({ settings, onSaved }: { settings: EmbeddingSettings; onS
         </Select>
         {options.length < settings.options.length && (
           <p className="text-xs text-muted-foreground">
-            Add a key on the Providers page to embed with OpenAI, Gemini, Mistral, Together AI or a
-            self-hosted server.
+            Add a key on the Providers page to embed with OpenAI, Gemini, Mistral, NVIDIA NIM,
+            Together AI or a self-hosted server.
           </p>
         )}
       </div>

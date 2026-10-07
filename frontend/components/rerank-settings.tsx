@@ -67,7 +67,8 @@ function RerankForm({ settings, onSaved }: { settings: RerankSettings; onSaved: 
         </Select>
         {options.length < settings.options.length && (
           <p className="text-xs text-muted-foreground">
-            Add a key on the Providers page to rerank with Together AI or a self-hosted server.
+            Add a key on the Providers page to rerank with Together AI, NVIDIA NIM or a
+            self-hosted server.
           </p>
         )}
       </div>

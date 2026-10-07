@@ -34,7 +34,7 @@ the reports that matter most:
   `ALLOW_PRIVATE_PROVIDER_URLS` is `false`.
 - **Rate limiting:** evading the limits with spoofed `X-Forwarded-For` when
   the request does not come from a host in `TRUSTED_PROXIES`.
-- **Uploads:** a crafted PDF, HTML, CSV or JSON file that runs code, reads
+- **Uploads:** a crafted PDF, Markdown or text file that runs code, reads
   files on the server, or exhausts memory despite `MAX_UPLOAD_MB`.
 
 ## What is not in scope

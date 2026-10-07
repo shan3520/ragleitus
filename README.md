@@ -154,8 +154,8 @@ flowchart LR
     end
 
     subgraph Experiments
-      run[Run] -. job via Redis .-> graph[LangGraph pipeline<br/>retrieve, prompt, generate,<br/>evaluate, record]
-      graph --> evaluators[Evaluator<br/>built-in judge, Ragas, DeepEval]
+      run[Run] -. job via Redis .-> pipeline[LangGraph pipeline<br/>retrieve, prompt, generate,<br/>evaluate, record]
+      pipeline --> evaluators[Evaluator<br/>built-in judge, Ragas, DeepEval]
     end
 
     subgraph Observability

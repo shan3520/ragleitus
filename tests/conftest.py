@@ -38,12 +38,19 @@ def _no_retry_waits(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_app_state():
+def _isolate_app_state(monkeypatch):
     from app.core.middleware import login_rate_limiter, rate_limiter
     from app.main import app
 
     rate_limiter.reset()
     login_rate_limiter.reset()
+    # The app's buckets do not refill during a test. Tests that use up a bucket
+    # (60 requests, 10 logins) and expect the next one refused otherwise fail on
+    # a slow machine, where the real rate (one request a second, one login every
+    # six) hands a token back before the loop ends. Tests of refilling build
+    # their own limiters (tests/core/test_rate_limit.py).
+    for limiter in (rate_limiter, login_rate_limiter):
+        monkeypatch.setattr(limiter, "rate", 1e-9)
     yield
     app.dependency_overrides.clear()
 
